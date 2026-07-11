@@ -208,6 +208,10 @@ extern struct net_buf_pool dynamic_gatt_pool;
 #endif /* CONFIG_BLE_USING_DYNAMIC_RAM */
 #endif
 
+/* Application-defined pools (bt_hid_host.c) */
+extern struct net_buf_pool hid_tx_pool;
+extern struct net_buf_pool hid_rx_pool;
+
 #if (CONFIG_BLE_USING_DYNAMIC_RAM)
 struct net_buf_pool* *_net_buf_pool_list[] = {
 #else
@@ -256,6 +260,8 @@ struct net_buf_pool *_net_buf_pool_list[] = {
 	#if defined(CONFIG_DYNAMIC_GATTS)
 	&dynamic_gatt_pool,
 	#endif
+	&hid_tx_pool,
+	&hid_rx_pool,
 };
 
 #else 
