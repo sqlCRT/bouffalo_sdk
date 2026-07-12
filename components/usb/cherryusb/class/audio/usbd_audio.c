@@ -165,6 +165,10 @@ static int audio_class_interface_request_handler(uint8_t busid, struct usb_setup
                                 (*data)[1] = 0x01;
                                 *len = 2;
                                 break;
+                            case AUDIO_REQUEST_SET_MIN:
+                            case AUDIO_REQUEST_SET_MAX:
+                            case AUDIO_REQUEST_SET_RES:
+                                break;
                             default:
                                 return -1;
                         }
