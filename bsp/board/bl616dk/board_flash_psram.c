@@ -382,13 +382,18 @@ void ATTR_CLOCK_SECTION __attribute__((noinline)) board_set_flash_80m(void)
         }
     }
 
-    /* Fallback: if standard calibration failed, try fixed frequencies.
-     * Try 80MHz first, then 60MHz (WIFIPLL_120M/2), each with 1T then 1.5T. */
+    /* Fallback: if delay==0, PLL was restored to pre_sdmin which may not match
+     * the nominal divider ratios. Reset PLL to standard sdmin first, then try
+     * 80MHz → 60MHz → 48MHz with 1T/1.5T timing. */
     if (config_change == 0) {
-        static const struct { uint8_t clk; uint8_t div; const char *name; } fb[] = {
-            { GLB_SFLASH_CLK_MUXPLL_80M,    0, "80M" },
-            { GLB_SFLASH_CLK_WIFIPLL_120M,  1, "60M" },
-            { GLB_SFLASH_CLK_WIFIPLL_96M,   1, "48M" },
+        clk_pll_set(26214400);
+        bflb_sflash_reset_continue_read(p_flash_cfg);
+        flash_reset_io_cs_delay();
+
+        static const struct { uint8_t clk; uint8_t div; } fb[] = {
+            { GLB_SFLASH_CLK_MUXPLL_80M,   0 },
+            { GLB_SFLASH_CLK_WIFIPLL_120M, 1 },
+            { GLB_SFLASH_CLK_WIFIPLL_96M,  1 },
         };
         for (unsigned i = 0; i < sizeof(fb)/sizeof(fb[0]) && !config_change; i++) {
             for (uint8_t rx_inv = 0; rx_inv <= 1 && !config_change; rx_inv++) {
@@ -401,6 +406,16 @@ void ATTR_CLOCK_SECTION __attribute__((noinline)) board_set_flash_80m(void)
                     config_change = 1;
                 }
             }
+        }
+
+        if (config_change == 0) {
+            /* All verified attempts failed — force 80MHz 1T as last resort */
+            sf_ctrl_cfg.clk_delay = 1;
+            sf_ctrl_cfg.clk_invert = 1;
+            sf_ctrl_cfg.rx_clk_invert = 0;
+            bflb_sflash_init(&sf_ctrl_cfg, NULL);
+            GLB_Set_SF_CLK(1, GLB_SFLASH_CLK_MUXPLL_80M, 0);
+            config_change = 1;
         }
     }
 
