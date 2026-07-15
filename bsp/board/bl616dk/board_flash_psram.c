@@ -382,8 +382,30 @@ void ATTR_CLOCK_SECTION __attribute__((noinline)) board_set_flash_80m(void)
         }
     }
 
+    /* Fallback: if standard calibration failed, try fixed frequencies.
+     * Try 80MHz first, then 60MHz (WIFIPLL_120M/2), each with 1T then 1.5T. */
     if (config_change == 0) {
-        /* restore flash config */
+        static const struct { uint8_t clk; uint8_t div; const char *name; } fb[] = {
+            { GLB_SFLASH_CLK_MUXPLL_80M,    0, "80M" },
+            { GLB_SFLASH_CLK_WIFIPLL_120M,  1, "60M" },
+            { GLB_SFLASH_CLK_WIFIPLL_96M,   1, "48M" },
+        };
+        for (unsigned i = 0; i < sizeof(fb)/sizeof(fb[0]) && !config_change; i++) {
+            for (uint8_t rx_inv = 0; rx_inv <= 1 && !config_change; rx_inv++) {
+                sf_ctrl_cfg.clk_delay = 1;
+                sf_ctrl_cfg.clk_invert = 1;
+                sf_ctrl_cfg.rx_clk_invert = rx_inv;
+                bflb_sflash_init(&sf_ctrl_cfg, NULL);
+                GLB_Set_SF_CLK(1, fb[i].clk, fb[i].div);
+                if (flash_check_bootheader(p_flash_cfg, 0) == 0) {
+                    config_change = 1;
+                }
+            }
+        }
+    }
+
+    if (config_change == 0) {
+        /* all attempts failed, restore original flash config */
         flash_reset_io_cs_delay();
         BL_WR_WORD(0x2000b000, sf_ctrl_0);
         BL_WR_WORD(0x2000b004, sf_ctrl_1);
