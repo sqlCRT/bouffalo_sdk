@@ -1395,6 +1395,20 @@ int bt_l2cap_br_chan_send(struct bt_l2cap_chan *chan, struct net_buf *buf)
 	return buf->len;
 }
 
+int bt_l2cap_br_chan_send_cb(struct bt_l2cap_chan *chan, struct net_buf *buf,
+                              bt_conn_tx_cb_t cb, void *user_data)
+{
+	struct bt_l2cap_br_chan *ch = BR_CHAN(chan);
+
+	if (buf->len > ch->tx.mtu) {
+		return -EMSGSIZE;
+	}
+
+	bt_l2cap_send_cb(ch->chan.conn, ch->tx.cid, buf, cb, user_data);
+
+	return buf->len;
+}
+
 static int l2cap_br_recv(struct bt_l2cap_chan *chan, struct net_buf *buf)
 {
 	struct bt_l2cap_br *l2cap = CONTAINER_OF(chan, struct bt_l2cap_br, chan);

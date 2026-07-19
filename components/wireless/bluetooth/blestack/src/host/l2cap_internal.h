@@ -345,6 +345,12 @@ int bt_l2cap_br_chan_connect(struct bt_conn *conn, struct bt_l2cap_chan *chan,
 /* Send packet data to connected peer */
 int bt_l2cap_br_chan_send(struct bt_l2cap_chan *chan, struct net_buf *buf);
 
+/* Send packet data to connected peer with HCI-ACK completion callback.
+ * cb fires when the HCI controller acknowledges the packet — equivalent to
+ * BTstack's L2CAP_EVENT_CAN_SEND_NOW for flow-controlled output. */
+int bt_l2cap_br_chan_send_cb(struct bt_l2cap_chan *chan, struct net_buf *buf,
+                              bt_conn_tx_cb_t cb, void *user_data);
+
 /*
  * Handle security level changed on link passing HCI status of performed
  * security procedure.
