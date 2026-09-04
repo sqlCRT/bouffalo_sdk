@@ -6,7 +6,6 @@
 #include <stdint.h>
 
 #include "FreeRTOS.h"
-#include "timers.h"
 #include "task.h"
 #include "queue.h"
 #include "semphr.h"
@@ -20,12 +19,9 @@
 
 #define GPIO_TIME_ENABLE (0)// debug
 
-#define NXSPI_GPIO_SAFEBLIND        (70+5) // from soc hw + 5(for time)
-#define NXSPI_GPIO_SAFEEMPIRICAL    (5)  //According to the empirical values obtained from actual tests
-#define NXSPI_GPIO_SAFEDELAY        (NXSPI_GPIO_SAFEBLIND - NXSPI_GPIO_SAFEEMPIRICAL)
-
-/* start TimerOut */
-#define NXSPI_START_TIMEOUT     (1000)
+#define NXSPI_GPIO_SAFYBLIND        (70+5) // from soc hw + 5(for time)
+#define NXSPI_GPIO_SAFYEMPIRICAL    (5)  //According to the empirical values obtained from actual tests
+#define NXSPI_GPIO_SAFYDELAY        (NXSPI_GPIO_SAFYBLIND - NXSPI_GPIO_SAFYEMPIRICAL)
 
 /* mem debug */
 #define NXSPI_DEBUG             (1)
@@ -33,7 +29,7 @@
 #ifdef NXSPI_NET
 #define NXSPI_BUFMALLOC         (0)
 #define NXBD_MTU                (2*1024)
-#define NXBD_ITEMS              (4)
+#define NXBD_ITEMS              (6)
 #define DMATX_LLIPOOL_CNT       (8) // dma config
 #define DMARX_LLIPOOL_CNT       (8) // dma config
 #else
@@ -48,17 +44,16 @@
 #define NTF_TRANS_START         (1<<0) // transaction start
 #define NTF_TRANS_COMPLETE      (1<<1) // transaction complete
 #define NTF_DATA_READY          (1<<2) // data ready
-#define NTF_SPIHD_RECEIVED      (1<<3) // spihd received
+#define NTF_SPIHD_REVEIVED      (1<<3) // spihd received
 #define NTF_CS_LOW              (1<<4) // cs low
 #define NTF_LP_EXIT             (1<<5) // lp exit
 #define NTF_LP_ENTER            (1<<6) // lp enter
-#define NTF_START_TIMEOUT       (1<<7) // lp enter
 
 /* st  */
 #define NXSPI_ST_INIT           (0)
 #define NXSPI_ST_CONFIGURED     (1)  // Configured
 #define NXSPI_ST_TSSTARTED      (2)  // Started
-#define NXSPI_ST_HDRECEIVED     (3)  // Header Received
+#define NXSPI_ST_HDRECEIVED     (3)  // Header Reveived
 #define NXSPI_ST_DATAREADY      (4)  // Started
 #define NXSPI_ST_LPSLEEP        (5)  // Sleeping
 
@@ -89,7 +84,7 @@
      ((mode) == (GPIO_INT_TRIG_MODE_ASYNC_FALLING_EDGE) ? "falling":\
       (mode) == (GPIO_INT_TRIG_MODE_ASYNC_RISING_EDGE) ? "rising":\
       (mode) == (GPIO_INT_TRIG_MODE_ASYNC_LOW_LEVEL) ? "low":\
-      (mode) == (GPIO_INT_TRIG_MODE_ASYNC_HIGH_LEVEL) ? "high" : "unknown")
+      (mode) == (GPIO_INT_TRIG_MODE_ASYNC_HIGH_LEVEL) ? "high" : "unknow")
 
 #if GPIO_TIME_ENABLE
 #define NXSPI_GPIO_TIME  (0)// gpio debug
@@ -106,6 +101,15 @@ typedef struct {
 } nx_stats_t;
 #endif
 
+typedef enum {
+    NXSPI_TYPE_AT = 0,
+    NXSPI_TYPE_NET_STA,
+    NXSPI_TYPE_NET_AP,
+    NXSPI_TYPE_HCI,
+    NXSPI_TYPE_OT,
+    NXSPI_TYPE_MAX,
+} nxspi_chan_t;
+
 /* header */
 typedef struct spi_header {
     uint16_t magic;
@@ -113,11 +117,7 @@ typedef struct spi_header {
     uint8_t  version   : 2;
     uint8_t  rx_stall  : 1;
     uint8_t  flags     : 5;
-#define NXSPI_TYPE_AT   (0)
-#define NXSPI_TYPE_NET  (1)
-#define NXSPI_TYPE_DEF  (2)
-#define NXSPI_TYPE_HCI  (3)
-    uint8_t  type;
+    nxspi_chan_t  type;
     uint16_t rsvd;
 } spi_header_t;
 
@@ -129,21 +129,21 @@ typedef struct _trans_desc {
     char         *payload;
 } trans_desc_t;
 
+typedef void (* nxspi_rxd_notify_func_t)(void);
+
 typedef struct _nxspi_desc {
 //    QueueHandle_t dnvq;  // download valid queue
     QueueHandle_t dnfq;  // download free queue
     QueueHandle_t upvq;  // up valid queue
     QueueHandle_t upfq;  // up free queue
 
-    QueueHandle_t dnat;
-    QueueHandle_t dnnet;
-    QueueHandle_t dndef;
+    QueueHandle_t dn[NXSPI_TYPE_MAX];
+    nxspi_rxd_notify_func_t rxd_notify_func[NXSPI_TYPE_MAX];
 
     uint64_t cfg_starttime;
     uint64_t cfg_endtime;
     uint32_t cfg_usetime;
     struct bflb_device_s *timer0;
-    TimerHandle_t timer; // for start->complete timeout
     TaskHandle_t task_hdl;
 
     trans_desc_t *upmsg;
@@ -207,6 +207,8 @@ int  nxspi_hwgpio_status(int pin);
 
 /* api */
 int nxspi_init(void);
+/* notify_func: message is available, and blocking calls are prohibited within  */
+int nxspi_rxd_callback_register(nxspi_rxd_notify_func_t notify_func, int type);
 
 /* api write */
 int nxspi_write(uint8_t type, uint8_t *buf, uint16_t len, uint32_t timeout);
@@ -219,7 +221,7 @@ trans_desc_t *nxspi_readbuf_pop(uint8_t type, uint32_t timeout);
 void nxspi_readbuf_push(trans_desc_t *msg);
 
 /* debug */
-int nxspi_fakewrite_forread(uint8_t *buf, uint16_t len, uint32_t timeout);
+int nxspi_fakewrite_forread(nxspi_chan_t type, uint8_t *buf, uint16_t len, uint32_t timeout);
 
 /* mem manage */
 void *malloc_aligned_with_padding(int size, int align_bytes);

@@ -5,7 +5,6 @@
 #include <stdbool.h>
 
 #include "FreeRTOS.h"
-#include "timers.h"
 #include "task.h"
 #include "queue.h"
 #include "semphr.h"
@@ -31,7 +30,6 @@ extern spi_header_t up_header;
 
 extern char *dn_buf;
 extern char *up_buf;
-extern void spi_start_timeout_handler(TimerHandle_t xTimer);
 extern void nxspi_task_entry(void *arg);
 
 extern struct bflb_dma_channel_lli_pool_s txlli_pool[4];
@@ -40,20 +38,18 @@ extern struct bflb_dma_channel_lli_pool_s rxlli_pool[4];
 extern trans_desc_t dnmsg_desc[NXBD_ITEMS];
 extern trans_desc_t upmsg_desc[NXBD_ITEMS];
 
-int nxspi_fakewrite_forread(uint8_t *buf, uint16_t len, uint32_t timeout)
+int nxspi_fakewrite_forread(nxspi_chan_t type, uint8_t *buf, uint16_t len, uint32_t timeout)
 {
     trans_desc_t *msg;
     int total_sent = 0;  // Track the total number of bytes successfully written
     int chunk_size = 0;
     BaseType_t result;
 
-    // Check for invalid arguments
-    if (buf == NULL || len == 0) {
-        NX_LOGW("arg err.\r\n");
-        return -1;  // Invalid buffer or length
+    if ((type < 0) || (type >= NXSPI_TYPE_MAX) || (len > 0 && buf == NULL)) {
+        return -1;
     }
 
-    while (len > 0) {
+    do {
         // Wait for an available descriptor from the free queue
         result = xQueueReceive(g_nxspi.dnfq, &msg, timeout);
         if (result != pdPASS) {
@@ -71,16 +67,20 @@ int nxspi_fakewrite_forread(uint8_t *buf, uint16_t len, uint32_t timeout)
 
         NX_LOGD("%p, %p, %d.\r\n", msg->payload, buf, chunk_size);
         // Copy the chunk of data to the descriptor's payload
-        memcpy(msg->payload, buf, chunk_size);
+        if (chunk_size > 0) {
+            memcpy(msg->payload, buf, chunk_size);
+        }
         msg->len = chunk_size;
-        buf += chunk_size;  // Move the buffer pointer forward by the written chunk size
+        if (buf) {
+            buf += chunk_size;  // Move the buffer pointer forward by the written chunk size
+        }
 
         // Send the message to the queue for transmission
-        while (xQueueSend(g_nxspi.dnat, &msg, portMAX_DELAY) != pdPASS);
+        while (xQueueSend(g_nxspi.dn[type], &msg, portMAX_DELAY) != pdPASS);
 
         //
         total_sent += chunk_size;
-    }
+    } while(len > 0);
     return total_sent;
 }
 
@@ -90,11 +90,14 @@ static int _init_queue(void)
     g_nxspi.upvq = xQueueCreate(NXBD_ITEMS + 1, sizeof(trans_desc_t *));
     g_nxspi.upfq = xQueueCreate(NXBD_ITEMS + 1, sizeof(trans_desc_t *));
 
-    g_nxspi.dnat = xQueueCreate(NXBD_ITEMS + 1, sizeof(trans_desc_t *));
-    g_nxspi.dnnet = xQueueCreate(NXBD_ITEMS + 1, sizeof(trans_desc_t *));
-    g_nxspi.dndef = xQueueCreate(NXBD_ITEMS + 1, sizeof(trans_desc_t *));
+    for (int i = 0; i < NXSPI_TYPE_MAX; i++) {
+        g_nxspi.dn[i] = xQueueCreate(NXBD_ITEMS + 1, sizeof(trans_desc_t *));
+        if (!g_nxspi.dn[i]) {
+            return -1;
+        }
+    }
 
-    if (!g_nxspi.dnfq || !g_nxspi.upvq || !g_nxspi.upfq || !g_nxspi.dnat || !g_nxspi.dnnet || !g_nxspi.dndef) {
+    if (!g_nxspi.dnfq || !g_nxspi.upvq || !g_nxspi.upfq) {
         NX_LOGE("failed to create queue\r\n");
         return -1;
     }
@@ -105,9 +108,9 @@ static int _init_queue(void)
         NX_LOGE("failed to mem\r\n");
         return -1;
     }
-#else
-    dn_buf = (char *)(((uint32_t)dn_buf & (~0x60000000)) | (0x20000000));
-    up_buf = (char *)(((uint32_t)up_buf & (~0x60000000)) | (0x20000000));
+#else 
+    dn_buf = (char *)(((uint32_t)dn_buf & (~0x60000000)) | (0x20000000)); 
+    up_buf = (char *)(((uint32_t)up_buf & (~0x60000000)) | (0x20000000)); 
 #endif
     for (int i = 0; i < NXBD_ITEMS; i++) {
         trans_desc_t *msg;
@@ -119,7 +122,7 @@ static int _init_queue(void)
         xQueueSend(g_nxspi.dnfq, &msg, portMAX_DELAY);
         NX_LOGI("g_nxspi.dnfq:%p, dnfq %d-payload+%p\r\n", g_nxspi.dnfq, i, dnmsg_desc[i].payload);
     }
-
+ 
     for (int i = 0; i < NXBD_ITEMS; i++) {
         trans_desc_t *msg;
         upmsg_desc[i].len = 0;
@@ -151,16 +154,10 @@ int nxspi_init(void)
 
     /* init queue */
     if (_init_queue()) {
-        NX_LOGD("failed to create queue, %ld\r\n", ret);
+        NX_LOGD("failed to create queue\r\n");
         return -1;
     }
     NX_LOGI("_init_queue\r\n");
-
-    g_nxspi.timer = xTimerCreate("s2c",
-            pdMS_TO_TICKS(NXSPI_START_TIMEOUT),     // per 1 S
-            pdFALSE,                                // auto reload
-            NULL,
-            spi_start_timeout_handler);
 
     g_nxspi.cfg_starttime = 0;
     g_nxspi.cfg_endtime = 0;
@@ -179,3 +176,22 @@ int nxspi_init(void)
     return 0;
 }
 
+int nxspi_rxd_callback_register(nxspi_rxd_notify_func_t notify_func, int type)
+{
+    if (NULL == g_nxspi.task_hdl) {
+        NX_LOGE("task nxspi is not created\r\n");
+        return -1;
+    }
+    if ((type < 0) || (type >= NXSPI_TYPE_MAX)) {
+        NX_LOGE("invalid nxspi type\r\n");
+        return -1;
+    }
+    if (NULL == notify_func) {
+        NX_LOGE("notify function is not input\r\n");
+        return -1;
+    }
+
+    g_nxspi.rxd_notify_func[type] = notify_func;
+
+    return 0;
+}

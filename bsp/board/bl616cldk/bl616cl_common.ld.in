@@ -281,6 +281,12 @@ SECTIONS
         *bl616cl_glb*.o*(.rodata*)
         *bl616cl_pds*.o*(.rodata*)
         *bl616cl_pm*.o*(.rodata*)
+        *bflb_sf_cfg*.o*(.rodata*)
+        *bflb_sf_ctrl*.o*(.rodata*)
+        *bflb_sflash*.o*(.rodata*)
+        *bflb_xip_sflash*.o*(.rodata*)
+        *bflb_ef_ctrl*.o*(.rodata*)
+        *bflb_flash*.o*(.rodata*)
         *bl616cl_romapi_patch*.o*(.rodata*)
 
         . = ALIGN(CONFIG_PMP_ALIGN_SIZE);
@@ -336,10 +342,6 @@ SECTIONS
         *(.bss*)
         *(.sbss*)
         *(COMMON)
-
-        __lp_mon_start = .;
-        *(.lp_mon_ctx)
-        __lp_mon_end = .;
 
         . = ALIGN(4);
     } > ram

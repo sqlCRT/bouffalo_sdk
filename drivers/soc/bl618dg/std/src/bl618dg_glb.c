@@ -1938,7 +1938,8 @@ void ATTR_CLOCK_SECTION GLB_Set_WIFIPLL_Fine_Tune(void)
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_FORCE_EN, 0);/* [23]  = 0 */
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_EN, 0);      /* [22]  = 0 */
     BL_WR_WORD(RF_BASE + RF_ANA1_WIFIPLL_PI_SDM_LMS_OFFSET, tmpVal);
-#else
+#endif
+#if 0
     /* WIFIPLL HW CTRL @ 0x200010D4 */
     tmpVal = BL_RD_WORD(CCI_BASE + CCI_WIFIPLL_HW_CTRL_OFFSET);
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_VCO_RSHT_EN_TX_BZ, 0);/* [16]  = 0 */
@@ -6059,6 +6060,60 @@ BL_Err_Type GLB_Set_Slave_Bus_Protect_Disable(uint32_t slaves)
     tmpVal = BL_RD_REG(GLB_BASE, GLB_BMX_CFG7);
     tmpVal &= ~slaves;
     BL_WR_REG(GLB_BASE, GLB_BMX_CFG7, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Select top miscellaneous XTAL source
+ *
+ * @param  sel: GLB_XTAL_DEG_32K.top_misc_xtal_sel[9:8]
+ *
+ * @return SUCCESS
+ *
+*******************************************************************************/
+BL_Err_Type GLB_Set_Top_Misc_Xtal(uint8_t sel)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_TOP_MISC_XTAL_SEL, sel);
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Trigger an RC32K-to-XTAL counter process
+ *
+ * @return SUCCESS
+ *
+ * @note   The software trigger and done-clear controls were moved from
+ *         PDS XTAL_CNT_32K to GLB_XTAL_DEG_32K (0x40000B80):
+ *         [31] xtal_cnt_32k_sw_trig_ps is W1P and sets
+ *              PDS XTAL_CNT_32K.xtal_cnt_32k_process[29];
+ *         [28] clr_xtal_cnt_32k_done is W1P and clears
+ *              PDS XTAL_CNT_32K.xtal_cnt_32k_done[30];
+ *         [27] xtal_cnt_32k_cgen gates the counter clock.
+ *
+*******************************************************************************/
+BL_Err_Type GLB_Trigger_Xtal_Cnt_32K_Process(void)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_XTAL_CNT_32K_CGEN_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    /* Clear the previous PDS XTAL_CNT_32K.done status through GLB bit[28]. */
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_CLR_XTAL_CNT_32K_DONE_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    /* Start a new count process; GLB bit[31] drives PDS process bit[29]. */
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_XTAL_CNT_32K_SW_TRIG_PS_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
 
     return SUCCESS;
 }

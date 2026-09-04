@@ -279,7 +279,9 @@ void board_init(void)
     board_psram_init();
 #endif
 
+#ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
     bl_show_log();
+#endif
     if (ret != 0) {
         printf("flash init fail!!!\r\n");
     }
@@ -379,6 +381,15 @@ void board_dac_gpio_init()
     bflb_gpio_init(gpio, GPIO_PIN_11, GPIO_ANALOG | GPIO_SMT_EN | GPIO_DRV_0);
     /* DAC_CHB */
     bflb_gpio_init(gpio, GPIO_PIN_17, GPIO_ANALOG | GPIO_SMT_EN | GPIO_DRV_0);
+}
+
+void board_dac_ref_gpio_init()
+{
+    struct bflb_device_s *gpio;
+
+    gpio = bflb_device_get_by_name("gpio");
+    /* DAC_REF */
+    bflb_gpio_init(gpio, GPIO_PIN_7, GPIO_ANALOG | GPIO_SMT_EN | GPIO_DRV_0);
 }
 
 void board_emac_rmii_gpio_init(uint8_t port)

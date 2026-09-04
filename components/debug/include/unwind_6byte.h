@@ -30,9 +30,9 @@
  *          uint16_t func_size;                 // 函数大小（字节）
  *      }
  *
- *   IMPORTANT: Leaf functions (frame_size=0) are NOT in the table
- *   - During backtrace, if PC is not found, it's a leaf function
- *   - For leaf function: PC = [SP], SP unchanged, continue unwind
+ *   IMPORTANT: Leaf functions (frame_size=0) are NOT in the table.
+ *   Unwinding such a function requires x1/RA from a saved register context;
+ *   RA cannot be inferred from the word at SP.
  */
 
 #ifndef __UNWIND_6BYTE_H__
@@ -96,32 +96,27 @@ bool unwind_table_init(const uint8_t *data);
  * - Returns false if entry not found (caller should treat as leaf function)
  *
  * @param pc            Program counter address
- * @param segments      Segment descriptor array
- * @param num_segments  Number of segments
  * @param entry         [out] Unwind entry structure
  * @return true if entry found, false if leaf function (not in table)
  */
-bool find_unwind_entry(uint32_t pc, const segment_desc_t *segments, int num_segments, unwind_entry_t *entry);
+bool find_unwind_entry(uint32_t pc, unwind_entry_t *entry);
 
 /**
  * @brief Unwind one stack frame
  *
  * Given current PC and SP, computes the previous frame's PC and SP.
  *
- * IMPORTANT: Leaf functions (frame_size=0) are NOT in the CFI table
- * - If find_unwind_entry returns false, PC is in a leaf function
- * - For leaf function: RA is at [SP], SP unchanged, continue unwind
+ * IMPORTANT: Leaf functions (frame_size=0) are NOT in the CFI table.
+ * A missing entry returns false; callers with a saved x1/RA may use it while
+ * leaving SP unchanged.
  *
  * @param pc            Current program counter
  * @param sp            Current stack pointer
- * @param segments      Segment descriptor array
- * @param num_segments  Number of segments
  * @param new_pc        [out] Previous frame's program counter
  * @param new_sp        [out] Previous frame's stack pointer
  * @return true if unwind succeeded, false on error
  */
 bool unwind_frame(uint32_t pc, uint32_t sp,
-                  const segment_desc_t *segments, int num_segments,
                   uint32_t *new_pc, uint32_t *new_sp);
 
 /**
@@ -140,6 +135,25 @@ bool unwind_frame(uint32_t pc, uint32_t sp,
 int backtrace(uint32_t pc, uint32_t sp,
               uint32_t *addrs, int max_frames,
               const uint8_t *cfi_table_base);
+
+/**
+ * @brief Perform backtrace with x1/RA from a saved register context
+ *
+ * If the initial PC has no unwind entry, the unwinder retries once at
+ * initial_ra without changing SP.  The supplied RA is never reused for a
+ * later frame.
+ *
+ * @param pc              Current program counter
+ * @param sp              Current stack pointer
+ * @param initial_ra      x1/RA saved with the current context, or 0 if absent
+ * @param addrs           [out] Array to store backtrace addresses
+ * @param max_frames      Maximum number of frames to capture
+ * @param cfi_table_base  Pointer to CFI table data (for initialization)
+ * @return Number of frames captured
+ */
+int backtrace_with_ra(uint32_t pc, uint32_t sp, uint32_t initial_ra,
+                      uint32_t *addrs, int max_frames,
+                      const uint8_t *cfi_table_base);
 
 /**
  * @brief Print backtrace results

@@ -86,6 +86,7 @@ ifeq ($(CHIP), bl618dg)
 	CONFIG_PEC_V2 ?=y
 	CONFIG_DVP_RASTER ?=n
 	CONFIG_MULTIMEDIA_VIDEO ?=y
+	CONFIG_GCC_OPTIMISE_LEVEL ?=-Os
 
 	ifeq ($(CPU_MODEL), b0)
 		CROSS_COMPILE ?=riscv64-zephyr-elf-
@@ -101,10 +102,11 @@ endif
 
 # BL616
 ifeq ($(CHIP), bl616)
-	ifeq ($(CONFIG_FREERTOS),y)
-		CONFIG_BACKTRACE ?=y
-	endif
 	CONFIG_GCC_OPTIMISE_LEVEL ?=-Os
+endif
+
+ifeq ($(CONFIG_FREERTOS),y)
+	CONFIG_BACKTRACE ?=y
 endif
 
 CPU_ID ?=
@@ -149,12 +151,16 @@ $(BUILD_DIR): Makefile cmake_cache library_build
 	$(MAKE) -C $(BUILD_DIR) post_build
 	$(MAKE) -C $(BUILD_DIR) combine
 
-_cmake_reset_cache:
+cmake_cache_ninja: cmake_config
+	$(MAKE) library_cmake_cache
 	-$(CMAKE) -E remove $(BUILD_DIR)/CMakeCache.txt
 	-$(CMAKE) -E remove_directory $(BUILD_DIR)/CMakeFiles
+	$(CMAKE) -S . -B $(BUILD_DIR) -G Ninja $(cmake_definition)
 
-cmake_cache: cmake_config _cmake_reset_cache
+cmake_cache: cmake_config
 	$(MAKE) library_cmake_cache
+	-$(CMAKE) -E remove $(BUILD_DIR)/CMakeCache.txt
+	-$(CMAKE) -E remove_directory $(BUILD_DIR)/CMakeFiles
 	$(CMAKE) -S . -B $(BUILD_DIR) -G $(cmake_generator) $(cmake_definition)
 
 $(BUILD_DIR)/generated:
@@ -171,7 +177,7 @@ endif
 app_deps:
 	@DIR=$(BUILD_DIR) sh -c 'find $${DIR} -mindepth 4 -name CMakeFiles |while read x; do y=$${x##$${DIR}/build_out/}; echo $${y%%CMakeFiles}; done'
 
-ninja:Makefile cmake_config _cmake_reset_cache
+ninja:Makefile cmake_cache_ninja library_build
 	$(CMAKE) -S . -B $(BUILD_DIR) -G Ninja $(cmake_definition)
 	cd $(BUILD_DIR) && ninja && ninja combine
 
@@ -185,25 +191,60 @@ pack_clean::
 
 CONFIG_DOTCONFIG_FILE=.config
 CONFIG_CMAKE_FILE=.config.cmake
+CONFIG_DEFCONFIG_CMAKE=$(BUILD_DIR)/generated/defconfig.cmake
+CONFIG_SEED = python3 $(BL_SDK_BASE)/tools/kconfig/config_seed.py
+CONFIG_KCONFIG_ENTRY=$(if $(wildcard Kconfig),Kconfig,$(BL_SDK_BASE)/Kconfig)
 
-menuconfig:
-	mkdir -p $(BUILD_DIR)/generated
+# Seed .config from the effective Make configuration before the first
+# menuconfig run.  An existing .config is left untouched.
+config-seed: cmake_config
+	$(CONFIG_SEED) --config-cmake $(CONFIG_DEFCONFIG_CMAKE) \
+		--kconfig $(CONFIG_KCONFIG_ENTRY) --output $(CONFIG_DOTCONFIG_FILE)
+
+menuconfig: config-seed
 	KCONFIG_CONFIG=$(CONFIG_DOTCONFIG_FILE) python3 $(BL_SDK_BASE)/tools/kconfig/menuconfig.py
-	# Generate local config.cmake for the example
 	@python3 $(BL_SDK_BASE)/tools/kconfig/kconfig2cmake.py --config $(CONFIG_DOTCONFIG_FILE) --output $(CONFIG_CMAKE_FILE)
-	@$(MAKE) $(CONFIG_CMAKE_FILE)
 
-guiconfig:
-	mkdir -p $(BUILD_DIR)/generated
+guiconfig: config-seed
 	KCONFIG_CONFIG=$(CONFIG_DOTCONFIG_FILE) python3 $(BL_SDK_BASE)/tools/kconfig/guiconfig.py
-	# Generate local config.cmake for the example
 	@python3 $(BL_SDK_BASE)/tools/kconfig/kconfig2cmake.py --config $(CONFIG_DOTCONFIG_FILE) --output $(CONFIG_CMAKE_FILE)
-	@$(MAKE) $(CONFIG_CMAKE_FILE)
+
+load-defconfig: cmake_config
+	$(CMAKE) -E remove -f $(CONFIG_DOTCONFIG_FILE)
+	$(CMAKE) -E remove -f $(CONFIG_CMAKE_FILE)
+	$(CONFIG_SEED) --force --config-cmake $(CONFIG_DEFCONFIG_CMAKE) \
+		--kconfig $(CONFIG_KCONFIG_ENTRY) --output $(CONFIG_DOTCONFIG_FILE)
+	@python3 $(BL_SDK_BASE)/tools/kconfig/kconfig2cmake.py --config $(CONFIG_DOTCONFIG_FILE) --output $(CONFIG_CMAKE_FILE)
+
+savedefconfig:
+	@if [ -f "$(CONFIG_DOTCONFIG_FILE)" ]; then \
+		mkdir -p "$(SDK_DEMO_PATH)/boards"; \
+		awk '/^# CONFIG_[A-Za-z0-9_]* is not set$$/ { sub(/^# /, ""); sub(/ is not set$$/, "=n"); print; next } { print }' \
+			"$(CONFIG_DOTCONFIG_FILE)" > "$(SDK_DEMO_PATH)/boards/defconfig"; \
+		echo "Saved $(SDK_DEMO_PATH)/boards/defconfig"; \
+	else \
+		echo "Error: $(CONFIG_DOTCONFIG_FILE) not found, run make menuconfig first"; \
+		exit 1; \
+	fi
+
+config-show:
+	@if [ -f "$(CONFIG_DOTCONFIG_FILE)" ]; then cat "$(CONFIG_DOTCONFIG_FILE)"; else echo "No .config found"; fi
+
+config-info:
+	@echo "SDK_DEMO_PATH = $(SDK_DEMO_PATH)"
+	@echo "KCONFIG entry = $(CONFIG_KCONFIG_ENTRY)"
+	@echo "dotconfig      = $(CONFIG_DOTCONFIG_FILE)"
+	@echo "config.cmake   = $(CONFIG_CMAKE_FILE)"
+	@echo "defconfig.cmake = $(CONFIG_DEFCONFIG_CMAKE)"
+
+kconfig-check:
+	BL_SDK_BASE=$(BL_SDK_BASE) python3 $(BL_SDK_BASE)/tools/kconfig/kconfig_check.py \
+		--kconfig $(CONFIG_KCONFIG_ENTRY)
 
 diffconfig::
 	@args="$(filter-out $@,$(MAKECMDGOALS))"; \
 	if [ -z "$$args" ]; then \
-		python3 $(BL_SDK_BASE)/tools/kconfig/diffconfig.py $(USER_DOTCONFIG_FILE).old $(USER_DOTCONFIG_FILE); \
+		python3 $(BL_SDK_BASE)/tools/kconfig/diffconfig.py $(CONFIG_DOTCONFIG_FILE).old $(CONFIG_DOTCONFIG_FILE); \
 	else \
 		python3 $(BL_SDK_BASE)/tools/kconfig/diffconfig.py $$args; \
 	fi
@@ -229,8 +270,8 @@ puncover:
 size:
 	$(MAKE) -C $(BUILD_DIR) size_report
 
-.PHONY: $(BUILD_DIR) clean clean-build menuconfig ninja flash efuse puncover size \
-        config-show config-info load-defconfig save-defconfig guiconfig diffconfig
+.PHONY: $(BUILD_DIR) clean clean-build config-seed menuconfig ninja flash efuse puncover size \
+        config-show config-info load-defconfig savedefconfig guiconfig diffconfig kconfig-check
 
 -include $(BL_SDK_BASE)/library.mk
 library_build:

@@ -55,7 +55,7 @@ void free_aligned_with_padding(void *ptr)
     }
     uintptr_t aligned_addr = (uintptr_t)ptr;
     uintptr_t addr = aligned_addr - *(char *)(aligned_addr - 1);
-
+    
     vPortFree((void *)addr);
 }
 
@@ -66,6 +66,8 @@ void *malloc_aligned_with_padding_nocache(int size, int align_bytes)
 
 void free_aligned_with_padding_nocache(void *ptr)
 {
+    if (ptr == NULL) {
+        return;
+    }
     free_aligned_with_padding((void *)((uintptr_t)(ptr) | 0x60000000));
 }
-

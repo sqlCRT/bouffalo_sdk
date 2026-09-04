@@ -809,6 +809,11 @@ __UNUSED static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_params[
         .jedec_id = 0x14345e,
         .param = flash_secreg_param_gd_le80c,
     },
+    {
+        /*!< XM25UH32D */
+        .jedec_id = 0x164046,
+        .param = flash_secreg_param_gd_wq32e_q128e,
+    },
 };
 /*@} end of group Flash_Secreg_Private_Variables */
 
@@ -827,7 +832,16 @@ __WEAK int ATTR_TCM_SECTION bflb_flash_secreg_callapi_before(const spi_flash_cfg
     const uint8_t bank = 0;
     uint8_t io_mode = flash_cfg->io_mode & 0xf;
 
+#ifndef CONFIG_DISABLE_FLASH_OP_IRQ_SAVE_RESTORE
     content->flag = bflb_irq_save();
+#else
+    content->flag = 0;
+    ret = bflb_flash_resource_lock(BFLB_FLASH_RESOURCE_WAIT_FOREVER);
+    if (ret != 0) {
+        return 0;
+    }
+    content->flag = 1;
+#endif
     bflb_xip_sflash_opt_enter(&content->aes_enable);
     ret = bflb_xip_sflash_state_save((void *)flash_cfg, &content->offset, group, bank);
     content->before_ret0 = (ret == 0);
@@ -848,13 +862,24 @@ __WEAK void ATTR_TCM_SECTION bflb_flash_secreg_callapi_after(const spi_flash_cfg
     const uint8_t group = 0;
     const uint8_t bank = 0;
 
+#ifdef CONFIG_DISABLE_FLASH_OP_IRQ_SAVE_RESTORE
+    if (content->flag == 0) {
+        return;
+    }
+#endif
+
     if ((bflb_sf_ctrl_get_owner() == SF_CTRL_OWNER_SAHB)) {
         if (content->before_ret0) {
             bflb_xip_sflash_state_restore((void *)flash_cfg, content->offset, group, bank);
         }
     }
     bflb_xip_sflash_opt_exit(content->aes_enable);
+#ifndef CONFIG_DISABLE_FLASH_OP_IRQ_SAVE_RESTORE
     bflb_irq_restore(content->flag);
+#else
+    bflb_flash_resource_unlock();
+    content->flag = 0;
+#endif
 #endif
 }
 

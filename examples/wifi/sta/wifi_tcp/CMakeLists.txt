@@ -5,6 +5,10 @@ find_package(bouffalo_sdk REQUIRED HINTS $ENV{BL_SDK_BASE})
 # User
 sdk_add_compile_definitions(-DCONFIG_CLI_CMD_ENABLE)
 
+if(NOT "${CHIP}" STREQUAL "bl602")
+    sdk_add_compile_definitions(-DHIGH_PERFORMANCE_PBUF=1)
+endif()
+
 if(CONFIG_WIFI_GATEWAY)
 sdk_add_compile_definitions(-DFHOST_BUFFER_COPY=1)
 sdk_add_compile_definitions(-DFHOST_RX_BUF_CNT=48)

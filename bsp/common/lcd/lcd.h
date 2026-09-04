@@ -30,9 +30,9 @@
 
 /* Do not modify the following */
 
-#define LCD_INTERFACE_SPI       1
-#define LCD_INTERFACE_DBI       2
-#define LCD_INTERFACE_DPI       3
+#define LCD_INTERFACE_SPI 1
+#define LCD_INTERFACE_DBI 2
+#define LCD_INTERFACE_DPI 3
 #define LCD_INTERFACE_DSI 4
 
 #if defined LCD_DBI_GC9307
@@ -107,6 +107,17 @@
 #define LCD_COLOR_DEPTH              ST7796_DBI_COLOR_DEPTH
 #define _LCD_FUNC_DEFINE(_func, ...) st7796_dbi_##_func(__VA_ARGS__)
 
+#elif defined LCD_DBI_ST77922
+
+#include "mipi_dbi/st77922_dbi.h"
+#define LCD_INTERFACE_TYPE           LCD_INTERFACE_DBI
+#define LCD_W                        ST77922_DBI_W
+#define LCD_H                        ST77922_DBI_H
+#define LCD_PIXEL_ALIGN_X            ST77922_DBI_PIXEL_ALIGN
+#define LCD_PIXEL_ALIGN_Y            ST77922_DBI_PIXEL_ALIGN
+#define LCD_COLOR_DEPTH              ST77922_DBI_COLOR_DEPTH
+#define _LCD_FUNC_DEFINE(_func, ...) st77922_dbi_##_func(__VA_ARGS__)
+
 #elif defined LCD_DBI_ST77926
 
 #include "mipi_dbi/st77926_dbi_qspi.h"
@@ -155,6 +166,15 @@
 #define LCD_H                        GC9503V_DPI_H
 #define LCD_COLOR_DEPTH              GC9503V_DPI_COLOR_DEPTH
 #define _LCD_FUNC_DEFINE(_func, ...) gc9503v_dpi_##_func(__VA_ARGS__)
+
+#elif defined LCD_DPI_ST7701P
+
+#include "mipi_dpi/st7701p_dpi.h"
+#define LCD_INTERFACE_TYPE           LCD_INTERFACE_DPI
+#define LCD_W                        ST7701P_DPI_W
+#define LCD_H                        ST7701P_DPI_H
+#define LCD_COLOR_DEPTH              ST7701P_DPI_COLOR_DEPTH
+#define _LCD_FUNC_DEFINE(_func, ...) st7701p_dpi_##_func(__VA_ARGS__)
 
 #elif defined LCD_DPI_ST7701S
 
@@ -210,6 +230,15 @@
 #define LCD_COLOR_DEPTH              ILI9881C_KD050023W4_DSI_COLOR_DEPTH
 #define _LCD_FUNC_DEFINE(_func, ...) ili9881c_kd050023w4_dsi_##_func(__VA_ARGS__)
 
+#elif defined LCD_DSI_ILI9806E_KD050FWFIA019
+
+#include "mipi_dsi/ili9806e_kd050fwfia019_dsi.h"
+#define LCD_INTERFACE_TYPE           LCD_INTERFACE_DSI
+#define LCD_W                        ILI9806E_KD050FWFIA019_DSI_W
+#define LCD_H                        ILI9806E_KD050FWFIA019_DSI_H
+#define LCD_COLOR_DEPTH              ILI9806E_KD050FWFIA019_DSI_COLOR_DEPTH
+#define _LCD_FUNC_DEFINE(_func, ...) ili9806e_kd050fwfia019_dsi_##_func(__VA_ARGS__)
+
 #elif defined LCD_DSI_ST7102_YH494
 
 #include "mipi_dsi/st7102_yh494_dsi.h"
@@ -219,6 +248,15 @@
 #define LCD_COLOR_DEPTH              ST7102_YH494_DSI_COLOR_DEPTH
 #define _LCD_FUNC_DEFINE(_func, ...) st7102_yh494_dsi_##_func(__VA_ARGS__)
 
+#elif defined LCD_DSI_ST7102_KD027HVF
+
+#include "mipi_dsi/st7102_kd027hvf_dsi.h"
+#define LCD_INTERFACE_TYPE           LCD_INTERFACE_DSI
+#define LCD_W                        ST7102_KD027HVF_DSI_W
+#define LCD_H                        ST7102_KD027HVF_DSI_H
+#define LCD_COLOR_DEPTH              ST7102_KD027HVF_DSI_COLOR_DEPTH
+#define _LCD_FUNC_DEFINE(_func, ...) st7102_kd027hvf_dsi_##_func(__VA_ARGS__)
+
 #elif defined LCD_DSI_AXS15231B_HS035
 
 #include "mipi_dsi/axs15231b_hs035_dsi.h"
@@ -227,6 +265,15 @@
 #define LCD_H                        AXS15231B_HS035_DSI_H
 #define LCD_COLOR_DEPTH              AXS15231B_HS035_DSI_COLOR_DEPTH
 #define _LCD_FUNC_DEFINE(_func, ...) axs15231b_hs035_dsi_##_func(__VA_ARGS__)
+
+#elif defined LCD_DSI_JD9365TX_7KF82
+
+#include "mipi_dsi/jd9365tx_7kf82_dsi.h"
+#define LCD_INTERFACE_TYPE           LCD_INTERFACE_DSI
+#define LCD_W                        JD9365TX_7KF82_DSI_W
+#define LCD_H                        JD9365TX_7KF82_DSI_H
+#define LCD_COLOR_DEPTH              JD9365TX_7KF82_DSI_COLOR_DEPTH
+#define _LCD_FUNC_DEFINE(_func, ...) jd9365tx_7kf82_dsi_##_func(__VA_ARGS__)
 
 #elif defined LCD_SPI_GC9307
 
@@ -343,12 +390,15 @@ int lcd_frame_callback_register(uint32_t callback_type, void (*callback)(void));
 int lcd_clear(lcd_color_t *screen_buffer, lcd_color_t color);
 int lcd_draw_point(lcd_color_t *screen_buffer, uint16_t x, uint16_t y, lcd_color_t color);
 int lcd_draw_area(lcd_color_t *screen_buffer, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, lcd_color_t color);
-int lcd_draw_picture(lcd_color_t *screen_buffer, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, lcd_color_t *picture);
+int lcd_draw_picture(lcd_color_t *screen_buffer, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2,
+                     lcd_color_t *picture);
 int lcd_draw_line(lcd_color_t *screen_buffer, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, lcd_color_t color);
-int lcd_draw_rectangle(lcd_color_t *screen_buffer, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, lcd_color_t color);
+int lcd_draw_rectangle(lcd_color_t *screen_buffer, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2,
+                       lcd_color_t color);
 int lcd_draw_circle(lcd_color_t *screen_buffer, uint16_t x, uint16_t y, uint16_t r, lcd_color_t color);
 #if FONT_ASCII_16X8
-int lcd_draw_str_ascii16(lcd_color_t *screen_buffer, uint16_t x, uint16_t y, lcd_color_t color, lcd_color_t bk_color, uint8_t *str, uint8_t num);
+int lcd_draw_str_ascii16(lcd_color_t *screen_buffer, uint16_t x, uint16_t y, lcd_color_t color, lcd_color_t bk_color,
+                         uint8_t *str, uint8_t num);
 #endif
 
 #endif

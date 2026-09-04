@@ -6,26 +6,29 @@
 /* Select screen Type, Optional:
 
   mipi dsi video interface (panel drives its own PLL/clock/GPIO via lcd_init)
-    LCD_DSI_ILI9881C_KD050020      (ILI9881C 720x1280, RGB565, 4-lane, e.g. KD050HDFIA020, BL618DG)
-    LCD_DSI_ILI9881C_KD050023W4    (ILI9881C 720x1280, RGB565, 2-lane, e.g. KD050HDFIA023-W4, BL618DG)
-    LCD_DSI_ST7102_YH494           (ST7102 480x960, RGB565, 2-lane, e.g. YH-494BSAC002N1, BL618DG)
-    LCD_DSI_AXS15231B_HS035        (AXS15231B 172x640, RGB565 link, ARGB8888 OSD, 1-lane, firmware-init, BL618DG)
+    LCD_DSI_ILI9881C_KD050020      (ILI9881C 720x1280, 4-lane, e.g. KD050HDFIA020, BL618DG)
+    LCD_DSI_ILI9881C_KD050023W4    (ILI9881C 720x1280, 2-lane, e.g. KD050HDFIA023-W4, BL618DG)
+    LCD_DSI_ILI9806E_KD050FWFIA019 (ILI9806E 480x854, 2-lane, e.g. KD050FWFIA019, BL618DG)
+    LCD_DSI_ST7102_YH494           (ST7102 480x960, 2-lane, e.g. YH-494BSAC002N1, BL618DG)
+    LCD_DSI_ST7102_KD027HVF        (ST7102 320x320, 1-lane, e.g. KD027HVFID009, BL618DG)
+    LCD_DSI_AXS15231B_HS035        (AXS15231B 172x640, 1-lane, firmware-init, BL618DG)
 
   mipi dpi (RGB) interface (parallel RGB; main.c sets up DPI GPIO + display clock)
-    LCD_DPI_GC9503V                (GC9503V 480x480, RGB565, BL618DG)
-    LCD_DPI_ST7701S                (ST7701S 480x480, RGB565, BL618DG)
-    LCD_DPI_JD9165BA               (JD9165BA 1024x600, NRGB8888, BL618DG)
-    LCD_DPI_ILI9488                (ILI9488 320x480, RGB565, BL618DG)
-    LCD_DPI_STANDARD               (generic parallel RGB, 800x480, NRGB8888, BL618DG)
+    LCD_DPI_GC9503V                (GC9503V 480x480, BL618DG)
+    LCD_DPI_ST7701P               (ST7701P 480x480, BL618DG)
+    LCD_DPI_ST7701S                (ST7701S 480x480, BL618DG)
+    LCD_DPI_JD9165BA               (JD9165BA 1024x600, BL618DG)
+    LCD_DPI_ILI9488                (ILI9488 320x480, BL618DG)
+    LCD_DPI_STANDARD               (generic parallel RGB, 800x480/1024x600, BL618DG)
 
   Switching is a one-line change here. Everything else (dpi_manager.c, main.c,
   filesystem_reader.c, CMakeLists.txt) keys off LCD_INTERFACE_TYPE (derived from
   this macro in bsp/common/lcd/lcd.h) so the same project builds for either panel.
 */
-#define LCD_DSI_AXS15231B_HS035
+#define LCD_DPI_STANDARD
 
 /* --------- DSI panels: reset + backlight live here (board-specific timing) --------- */
-#if defined LCD_DSI_ST7102_YH494 || defined LCD_DSI_ILI9881C_KD050023W4 || defined LCD_DSI_ILI9881C_KD050020 || defined LCD_DSI_AXS15231B_HS035
+#if defined LCD_DSI_ST7102_YH494 || defined LCD_DSI_ST7102_KD027HVF || defined LCD_DSI_ILI9881C_KD050023W4 || defined LCD_DSI_ILI9881C_KD050020 || defined LCD_DSI_ILI9806E_KD050FWFIA019 || defined LCD_DSI_AXS15231B_HS035
 
     /* DSI panel reset is driven by the LCD framework: lcd_init() pulses the reset
      * GPIO (per these macros) before calling into the panel's bring-up. Reset
@@ -45,6 +48,13 @@
     #define LCD_BACKLIGHT_EN            1
     #define LCD_BACKLIGHT_PIN          GPIO_PIN_40 /* backlight enable on this board */
     #define LCD_BACKLIGHT_ACTIVE_LEVEL 1          /* active-high: drive high to light */
+
+    /* ILI9806E panel orientation via MADCTL (0x36), applied after its init table.
+     * Board-mounting property, so it lives here rather than in the panel driver.
+     * Only consumed when LCD_DSI_ILI9806E_KD050FWFIA019 is the selected panel.
+     *   0: panel default orientation
+     *   1: 180-degree rotation/mirror */
+    #define ILI9806E_KD050FWFIA019_ROTATE_180  0
 
 /* --------- DPI panel configs (copied verbatim from bsp/common/lcd/lcd_conf.h) --------- */
 
@@ -85,6 +95,38 @@
     /* ILI9488 LCD width and height */
     #define GC9503V_DPI_W 480
     #define GC9503V_DPI_H 480
+
+
+/* dpi st7701p config */
+#elif defined LCD_DPI_ST7701P
+
+    /* Selecting DPI working mode
+        2: PEC simulation (support: bl616, bl618dg)
+        3: DPI v2 peripheral (support: bl618dg)
+    */
+    #define LCD_DPI_INTERFACE_TYPE 3
+
+    /* Selecting initialization interface
+        0: Not using or custom
+        1: Software spi 3-wires 9-bits mode, any pin can be used.
+        2: Software spi 4-wires 8-bits mode, any pin can be used.
+    */
+    #define LCD_DPI_INIT_INTERFACE_TYPE 1
+
+    /* Selecting framebuffer format
+        1: rgb565 (16-bits)
+        2: nrgb8888 (32-bits, output rgb888)
+    */
+    #define ST7701P_DPI_PIXEL_FORMAT 2
+
+    /* RGB-BGR Order control
+        0: output R-G-B
+        1: output B-G-R
+    */
+    #define ST7701P_DPI_RGB_ORDER_MODE 0
+
+    #define ST7701P_DPI_W 480
+    #define ST7701P_DPI_H 480
 
 
 /* dpi st7701s config */
@@ -131,12 +173,7 @@
     /* Selecting initialization interface
         0: Not using or custom
         1: Software spi 3-wires 9-bits mode, any pin can be used.
-        2: Software spi 4-wires 8-bits mode, any pin can be used.
-
-       This board's panel is plain parallel RGB (only DE/VS/HS/PCLK + data
-       lines, no SPI config pins), so no register init is needed -- treat it
-       like LCD_DPI_STANDARD. Type 0 also avoids the SW-SPI CS clobbering the
-       pixel-clock pin (both would land on GPIO_PIN_0). */
+        2: Software spi 4-wires 8-bits mode, any pin can be used. */
     #define LCD_DPI_INIT_INTERFACE_TYPE 0
 
     /* Selecting pixel format
@@ -213,40 +250,42 @@
     #define STANDARD_DPI_PIXEL_FORMAT 2
 
     /* STANDARD LCD width and height */
-    #define STANDARD_DPI_W 800
-    #define STANDARD_DPI_H 480
+    #define STANDARD_DPI_W 1024
+    #define STANDARD_DPI_H 600
 
     /* RGB timing parameter Settings
        Total Width = HSW + HBP + Active_Width + HFP
        Total Height = VSW + VBP + Active_Height + VFP */
 
-    // /* Hsync Pulse Width */
-    // #define STANDARD_DPI_HSW 4
-    // /* Hsync Back Porch */
-    // #define STANDARD_DPI_HBP 82
-    // /* Hsync Front Porch */
-    // #define STANDARD_DPI_HFP 14
-
-    // /* Vsync Pulse Width */
-    // #define STANDARD_DPI_VSW 5
-    // /* Vsync Back Porch */
-    // #define STANDARD_DPI_VBP 6
-    // /* Vsync Front Porch */
-    // #define STANDARD_DPI_VFP 39
-
+    #if ((STANDARD_DPI_W == 1024)&&(STANDARD_DPI_H == 600))
     /* Hsync Pulse Width */
-    #define STANDARD_DPI_HSW 45
+    #define STANDARD_DPI_HSW 20 
     /* Hsync Back Porch */
-    #define STANDARD_DPI_HBP 45
+    #define STANDARD_DPI_HBP 140
     /* Hsync Front Porch */
-    #define STANDARD_DPI_HFP 89
+    #define STANDARD_DPI_HFP 160
 
     /* Vsync Pulse Width */
-    #define STANDARD_DPI_VSW 7
+    #define STANDARD_DPI_VSW 3
     /* Vsync Back Porch */
-    #define STANDARD_DPI_VBP 7
+    #define STANDARD_DPI_VBP 23
     /* Vsync Front Porch */
-    #define STANDARD_DPI_VFP 5
+    #define STANDARD_DPI_VFP 12
+#else
+    /* Hsync Pulse Width */
+    #define STANDARD_DPI_HSW 4
+    /* Hsync Back Porch */
+    #define STANDARD_DPI_HBP 82
+    /* Hsync Front Porch */
+    #define STANDARD_DPI_HFP 14
+
+    /* Vsync Pulse Width */
+    #define STANDARD_DPI_VSW 5
+    /* Vsync Back Porch */
+    #define STANDARD_DPI_VBP 6
+    /* Vsync Front Porch */
+    #define STANDARD_DPI_VFP 39
+#endif
 
     /* Maximum refresh frame rate per second, Used to automatically calculate the clock frequency */
     #define STANDARD_DPI_FRAME_RATE 70
@@ -299,12 +338,6 @@
         4: Yellow
     */
     #define LCD_DPI_V2_TEST_PATTERN    0
-
-    /* Enable OSD layer switch for screen buffer updates.
-       When enabled, the base layer is YUV planar (MJDEC video output) and the OSD
-       layer shows LVGL RGB content on top. This project's dpi_manager + lv_port
-       depend on it being 1. */
-    #define LCD_DPI_V2_USE_OSD_LAYER_SWITCH 1
 #endif
 
 /* clang-format on */

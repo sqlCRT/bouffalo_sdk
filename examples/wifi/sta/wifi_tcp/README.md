@@ -20,6 +20,10 @@ eg:
 make CHIP=bl616 BOARD=bl616dk
 ```
 
+For BL616/BL618/BL618DG, the default build uses a balanced TCP profile:
+`TCP_SND_BUF=96*TCP_MSS`, `LWIP_HEAP_SIZE=64K`, and no-copy TCP TX pbufs.
+BL602 keeps the original low-memory profile.
+
 - BL618DG
 
 ```bash
@@ -96,4 +100,3 @@ Connection to 192.168.1.3 3365 port [tcp/*] succeeded!
 123456  # echo received data
 
 ```
-

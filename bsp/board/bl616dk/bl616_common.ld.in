@@ -254,6 +254,10 @@ SECTIONS
     . = ALIGN(CONFIG_PMP_ALIGN_SIZE);
     SECTION_LOAD_PROLOGUE(tcm_text, ,)
     {
+#ifdef CONFIG_RAM_COPY_CODE
+        *(.text*)
+#endif
+
 #if defined(CONFIG_WFA) && !defined(CONFIG_PSRAM_COPY_CODE)
         INCLUDE run_in_ram_function.ld.in
 
@@ -308,16 +312,21 @@ SECTIONS
         *bl616_glb*.o*(.rodata*)
         *bl616_pds*.o*(.rodata*)
         *bl616_common*.o*(.rodata*)
-        *bl616_sf_cfg*.o*(.rodata*)
-        *bl616_sf_ctrl*.o*(.rodata*)
-        *bl616_sflash*.o*(.rodata*)
-        *bl616_xip_sflash*.o*(.rodata*)
-        *bl616_ef_ctrl*.o*(.rodata*)
+        *bflb_sf_cfg*.o*(.rodata*)
+        *bflb_sf_ctrl*.o*(.rodata*)
+        *bflb_sflash*.o*(.rodata*)
+        *bflb_xip_sflash*.o*(.rodata*)
+        *bflb_ef_ctrl*.o*(.rodata*)
         *bl616_ef_cfg*.o*(.rodata*)
         *bl616_clock*.o*(.rodata*)
         *_clz*.o*(.rodata*)
         *bflb_flash*.o*(.rodata*)
         *bl616_romapi_patch*.o*(.rodata*)
+
+#ifdef CONFIG_RAM_COPY_CODE
+        *(.rodata*)
+        *(.srodata*)
+#endif
 
         . = ALIGN(CONFIG_PMP_ALIGN_SIZE);
     } > ram AT > rom
@@ -373,10 +382,6 @@ SECTIONS
         *(.bss*)
         *(.sbss*)
         *(COMMON)
-
-        __lp_mon_start = .;
-        *(.lp_mon_ctx)
-        __lp_mon_end = .;
 
         . = ALIGN(4);
     } > ram

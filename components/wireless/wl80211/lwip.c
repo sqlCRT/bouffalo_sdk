@@ -62,6 +62,15 @@ void wl80211_tcpip_input(uint8_t vif_type, void *rxhdr, void *buf, uint32_t frm_
 {
     struct pbuf_custom *pc;
     struct pbuf *p;
+    struct eth_hdr *ethhdr = buf;
+
+    if ((vif_type == WL80211_VIF_STA) &&
+        (frm_len >= SIZEOF_ETH_HDR) &&
+        !memcmp(ethhdr->src.addr, vif2netif[WL80211_VIF_STA].hwaddr,
+                ETH_HWADDR_LEN)) {
+        wl80211_mac_rx_free(rxhdr);
+        return;
+    }
 
     // TODO If the current packet is being forwarded to the host, use zerocopy.
     if (frm_len < CONFIG_WL80211_RX_ZEROCOPY_THRES) {
@@ -80,7 +89,7 @@ void wl80211_tcpip_input(uint8_t vif_type, void *rxhdr, void *buf, uint32_t frm_
         wl80211_mac_rx_free(rxhdr);
     } else {
         pc = rxhdr;
-        p = pbuf_alloced_custom(PBUF_RAW, frm_len, PBUF_REF | PBUF_TYPE_FLAG_STRUCT_DATA_CONTIGUOUS, pc, buf, frm_len);
+        p = pbuf_alloced_custom(PBUF_RAW, frm_len, PBUF_REF, pc, buf, frm_len);
         pc->custom_free_function = (void *)wl80211_mac_rx_free;
     }
 
@@ -114,18 +123,32 @@ err_t wl80211_output(struct netif *net_if, struct pbuf *buf)
 {
     struct wl80211_tx_header *txhdr;
     struct iovec txseg[5];
-    int seg_cnt;
-    int payload_len = buf->tot_len;
-    int remain_len = payload_len;
+    int seg_cnt, payload_len, remain_len;
+
+    if (!netif_is_link_up(net_if)) {
+        return ERR_IF;
+    }
+
+    if (buf->next != NULL && pbuf_clen(buf) > 5) {
+        struct pbuf *q = pbuf_clone(PBUF_RAW_TX, PBUF_RAM, buf);
+        if (!q) {
+            return ERR_MEM;
+        }
+        buf = q;
+        // dont call pbuf_free(buf) !!
+    } else {
+        // Increase the ref count so that the buffer is not freed by the networking
+        // stack until it is actually sent over the WiFi interface
+        pbuf_ref(buf);
+    }
+
+    payload_len = buf->tot_len;
+    remain_len = payload_len;
 
     // first segment record payload
     txseg[0].iov_base = buf->payload;
     txseg[0].iov_len = buf->len;
     remain_len -= buf->len;
-
-    // Increase the ref count so that the buffer is not freed by the networking
-    // stack until it is actually sent over the WiFi interface
-    pbuf_ref(buf);
 
     if (pbuf_header(buf, PBUF_LINK_ENCAPSULATION_HLEN)) {
         abort();
@@ -391,6 +414,16 @@ void _wifi_mgmr_ap_stop_dhcpd(void)
     g_wl80211_ap_dhcpd_running = 0;
 }
 
+void _wifi_mgmr_ap_release_dhcp_lease(const uint8_t mac[6])
+{
+    if (!g_wl80211_ap_dhcpd_running || mac == NULL) {
+        return;
+    }
+
+    // maybe loss in mailbox max
+    dhcpd_release_client_by_mac(&vif2netif[WL80211_VIF_AP], mac);
+}
+
 void _wifi_mgmr_ap_start_dhcpd(bool use_ipcfg, bool use_dhcpd, int start, int limit, uint32_t ap_ipaddr,
                                uint32_t ap_mask)
 {
@@ -478,3 +511,10 @@ void set_ipv4_cmd(int argc, char **argv)
     return;
 }
 #endif
+
+void netstat_cmd(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    tcpip_callback(stats_netstat, NULL);
+}

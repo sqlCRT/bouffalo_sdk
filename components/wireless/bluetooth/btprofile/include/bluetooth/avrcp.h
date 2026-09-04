@@ -184,6 +184,9 @@ struct avrcp_media_player {
 };
 
 int bt_avrcp_init(void);
+#if defined(BFLB_BREDR_PATCH_DEINIT_CLEANUP)
+void bt_avrcp_deinit(void);
+#endif
 void avrcp_cb_register(struct avrcp_callback *cb);
 int avrcp_recv(struct bt_l2cap_chan *chan, struct net_buf *buf);
 struct bt_avrcp *bt_avrcp_connect(struct bt_conn *conn);
@@ -193,6 +196,7 @@ int avrcp_get_play_status_cmd(struct bt_avctp *session);
 int avrcp_reg_not_cmd(struct bt_avctp *session, uint8_t event);
 
 void avrcp_set_player_parameter(uint8_t status,uint32_t position,uint32_t duration);
+int avrcp_set_playback_status(uint8_t status);
 int avrcp_change_volume(uint8_t vol);
 int avrcp_hdl_set_abs_vol(struct bt_avctp *session, uint8_t trans_lab, uint8_t *params);
 int avrcp_hdl_reg_not_vol(struct bt_avctp *session, uint8_t trans_lab, uint8_t rsp_type);
@@ -205,5 +209,3 @@ int avrcp_reg_play_status_notification(struct bt_avctp *session);
 #endif
 
 #endif /* _INCLUDE_BLUETOOTH_AVRCP_H_ */
-
-

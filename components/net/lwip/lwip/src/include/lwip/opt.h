@@ -513,7 +513,7 @@
  * The number of sys timeouts used by the core stack (not apps)
  * The default number of timeouts is calculated here for all enabled modules.
  */
-#define LWIP_NUM_SYS_TIMEOUT_INTERNAL   (LWIP_TCP*3 + IP_REASSEMBLY + LWIP_ARP + (2*LWIP_DHCP) + LWIP_AUTOIP + (LWIP_IGMP_TIMERS_ONDEMAND ? 0 : LWIP_IGMP) + LWIP_DNS + PPP_NUM_TIMEOUTS + (LWIP_IPV6 * (1 + LWIP_IPV6_REASS + LWIP_IPV6_MLD)))
+#define LWIP_NUM_SYS_TIMEOUT_INTERNAL   (LWIP_TCP*3 + IP_REASSEMBLY + LWIP_ARP + (2*LWIP_DHCP) + LWIP_AUTOIP + (LWIP_IGMP_TIMERS_ONDEMAND ? 0 : LWIP_IGMP) + LWIP_DNS + PPP_NUM_TIMEOUTS + (LWIP_IPV6 * (1 + LWIP_IPV6_REASS + LWIP_IPV6_MLD + LWIP_IPV6_DHCP6 + LWIP_IPV6_LP_REACHABILITY_REFRESH)))
 
 /**
  * MEMP_NUM_SYS_TIMEOUT: the number of simultaneously active timeouts.
@@ -1684,6 +1684,26 @@
 #if !defined LWIP_NETIF_TX_SINGLE_PBUF || defined __DOXYGEN__
 #define LWIP_NETIF_TX_SINGLE_PBUF       0
 #endif /* LWIP_NETIF_TX_SINGLE_PBUF */
+
+/**
+ * LWIP_TCPIP_FORCE_TX_COPY: if this is set to 1, the TCP/IP stack forces
+ * a data copy at the socket layer and TCP write layer to ensure all outgoing
+ * pbuf payload resides in lwIP-managed memory. This is distinct from
+ * LWIP_NETIF_TX_SINGLE_PBUF (which controls single-pbuf output and oversize
+ * allocation strategy). Use this on platforms where:
+ *   - DMA-capable MACs have restricted memory access (e.g., cannot access
+ *     application OCRAM) but DO support scatter-gather
+ *   - The primary goal is memory region safety, not single-pbuf output
+ *
+ * When this is set to 1:
+ *   - Socket sendto/sendmsg uses netbuf_alloc+MEMCPY instead of netbuf_ref
+ *   - TCP write path forces TCP_WRITE_FLAG_COPY
+ * When set to 0:
+ *   - Zero-copy PBUF_REF is used where possible (original behavior)
+ */
+#if !defined LWIP_TCPIP_FORCE_TX_COPY || defined __DOXYGEN__
+#define LWIP_TCPIP_FORCE_TX_COPY        0
+#endif /* LWIP_TCPIP_FORCE_TX_COPY */
 
 /**
  * LWIP_NUM_NETIF_CLIENT_DATA: Number of clients that may store
@@ -3574,6 +3594,46 @@
 
 #if !defined IPV6_TIMER_PRECISE_NEEDED || defined __DOXYGEN__
 #define IPV6_TIMER_PRECISE_NEEDED       0
+#endif
+
+#if !defined LWIP_IPV6_LP_REACHABILITY_REFRESH || defined __DOXYGEN__
+#define LWIP_IPV6_LP_REACHABILITY_REFRESH (LWIP_TIMERS && IPV6_TIMER_PRECISE_NEEDED)
+#endif
+
+#if !defined LWIP_IPV6_LP_REFRESH_MAX_NETIFS || defined __DOXYGEN__
+#define LWIP_IPV6_LP_REFRESH_MAX_NETIFS 2
+#endif
+
+#if !defined LWIP_IPV6_LP_REFRESH_TIMER_INTERVAL_MS || defined __DOXYGEN__
+#define LWIP_IPV6_LP_REFRESH_TIMER_INTERVAL_MS 60000
+#endif
+
+#if !defined LWIP_IPV6_LP_NS_INTERVAL_MS || defined __DOXYGEN__
+#define LWIP_IPV6_LP_NS_INTERVAL_MS     60000
+#endif
+
+#if !defined LWIP_IPV6_LP_RS_INTERVAL_MS || defined __DOXYGEN__
+#define LWIP_IPV6_LP_RS_INTERVAL_MS     300000
+#endif
+
+#if !defined LWIP_IPV6_LP_RS_ROUTER_LIFETIME_GUARD_MS || defined __DOXYGEN__
+#define LWIP_IPV6_LP_RS_ROUTER_LIFETIME_GUARD_MS LWIP_IPV6_LP_REFRESH_TIMER_INTERVAL_MS
+#endif
+
+#if !defined LWIP_IPV6_LP_RS_FAST_RETRY_MS || defined __DOXYGEN__
+#define LWIP_IPV6_LP_RS_FAST_RETRY_MS   60000
+#endif
+
+#if !defined LWIP_IPV6_LP_RS_FAST_RETRY_COUNT || defined __DOXYGEN__
+#define LWIP_IPV6_LP_RS_FAST_RETRY_COUNT 3
+#endif
+
+#if !defined LWIP_IPV6_LP_MLD_INTERVAL_MS || defined __DOXYGEN__
+#define LWIP_IPV6_LP_MLD_INTERVAL_MS    180000
+#endif
+
+#if !defined LWIP_IPV6_LP_MLD_IMMEDIATE_REPORT || defined __DOXYGEN__
+#define LWIP_IPV6_LP_MLD_IMMEDIATE_REPORT 1
 #endif
 
 #if !defined IP4_FRAG_TIMER_PRECISE_NEEDED || defined __DOXYGEN__

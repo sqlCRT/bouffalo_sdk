@@ -259,8 +259,8 @@ static const ATTR_TCM_CONST_SECTION spi_flash_cfg_type flash_cfg_issi_25lp256 = 
     .write_vreg_enable_cmd = 0x00,
 
     /* qpi mode */
-    .enter_qpi = 0x38,
-    .exit_qpi = 0xff,
+    .enter_qpi = 0x35,
+    .exit_qpi = 0xf5,
 
     /*AC*/
     .time_e_sector = 300,
@@ -288,6 +288,16 @@ static const ATTR_TCM_CONST_SECTION Flash_Info_t flash_infos[] = {
         //.name="ZB_WQ80A_08_33",
         .cfg = &flash_cfg_winb_16jv,
     },
+    {
+        .jedec_id = 0x164046,
+        //.name="xm_uh32d_32_33",
+        .cfg = &flash_cfg_winb_16jv,
+    },
+    {
+        .jedec_id = 0x21609d,
+        //.name="issi_25lp01g_33",
+        .cfg = &flash_cfg_issi_25lp256,
+    },
 };
 
 static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_secreg_infos[] = {
@@ -298,6 +308,10 @@ static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_secreg_infos[] =
     {
         .jedec_id = 0x14345e,
         .param = flash_secreg_param_gd_le80c,
+    },
+    {
+        .jedec_id = 0x164046,
+        .param = flash_secreg_param_gd_wq32e_q128e,
     },
 };
 

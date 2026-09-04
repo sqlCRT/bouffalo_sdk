@@ -1,5 +1,370 @@
 # CHANGELOG
 
+## v2.3.32 — since v2.3.31 (2026-08-10 → 2026-08-17)
+
+### New Features
+
+- **Build / Configuration**
+  - Integrated menuconfig and added component configuration menus for file system, graphics, multimedia, and AT module
+
+- **Peripherals / Drivers**
+  - Added DAC reference voltage configuration API
+  - Added PEC infrared (IR) receiver support
+
+- **USB**
+  - Added USB console logging for cases where the serial TX/RX is occupied
+
+- **Networking**
+  - Added mDNS configuration to the uart_wifi example
+  - Reconstructed iperf with TCP/UDP raw and socket backends and updated documentation
+
+- **Bluetooth**
+  - Added per-device BR/EDR inquiry result callback
+  - Enhanced BR/EDR diagnostics and media control
+
+- **Clock / Power**
+  - Added predictive coarse calibration with half-MSB support for RC32K, with half-MSB state restored on low-power wakeup
+
+- **Display**
+  - Updated LVGL OSD example and added ST77922, ST7701P, and ST7102 LCD drivers
+
+- **MFG**
+  - Added BL618DG RF calibration flash, OTP, and eFuse operations
+
+- **Flash**
+  - Added IS25LP01GJ flash support for BL616
+
+### Bug Fixes
+
+- **WiFi**
+  - Fixed rate control time integer wrap-around
+  - Rejected duplicate Block ACK frames before upload
+  - Exported channel switch state
+  - Fixed TX stalls after channel scans
+  - Extra information elements are now propagated for scan and association
+  - Firmware status is now checked before TX
+  - Fixed AP DHCPD client release when a station disconnects
+  - Fixed SDU RX indication triggering a heavy load loop
+
+- **Networking**
+  - Fixed multiple DHCPD issues in lwIP
+
+- **System / RTOS**
+  - Fixed tick compensation overflow during long RTC sleep
+  - boot2 ISP now uses chip-specific bootrom versions
+
+- **Power**
+  - Removed invalid BLE EM override in the low-power example
+  - Adapted the RTC driver for BL616CL
+
+- **BL618DG**
+  - Fixed SDH timeout judgment
+  - Fixed MFG SPDT configuration
+
+- **Zigbee / 802.15.4**
+  - Fixed BL702L private rate hardware ACK reception issue
+
+- **Flash**
+  - Added support for large-capacity JEDEC IDs
+  - Normalized flash pin configuration for BL616CL/BL618DG
+
+- **Linux Driver**
+  - Fixed ioctl path handling on newer kernels
+  - Fixed MFG TCAL setting and USB/SDIO PID debug
+
+- **MFG**
+  - Fixed BL616CL temperature calibration USB PID
+
+### Improvements
+
+- **WiFi / Networking**
+  - Added a high-performance TCP demo
+  - Increased TCP benchmark RX buffers
+
+- **Bluetooth**
+  - Updated Nimble throughput handling for BL618DG
+
+- **Drivers**
+  - Unified the UART driver into a single runtime-configurable driver
+
+- **SDH**
+  - Removed the workaround for the SDH hardware issue
+
+- **MFG**
+  - BL616CL MFG build now supports an autoboot flag
+
+## v2.3.31 — since v2.3.30 (2026-07-27 → 2026-08-10)
+
+### New Features
+
+- **OTA / FOTA**
+  - HTTP/HTTPS/TCP OTA commands now support a reboot option, allowing the current firmware to keep running after a successful update
+  - Active OTA partition is marked immediately, so multiple updates can be installed before rebooting
+  - Fast OTA mode can now be enabled or disabled at build time
+
+- **USB**
+  - Updated USB protocol stack to v1.6.1
+  - Expanded USB CLI demo with device/host templates, Ethernet adapters, and documentation
+  - Added USB port unregister support
+
+- **Camera / Display**
+  - Added 720P GC2145 camera to MIPI DSI LCD example
+  - Added GC0308 camera with ST77926 LCD support to camera/LCD example
+
+- **Networking**
+  - Nethub on BL616/BL618DG now automatically selects the SDIO or USB interface
+
+- **Power**
+  - Added runtime power mode configuration for BL616CL, including matching LPFW voltage parameter updates
+
+- **BL618DG**
+  - Added SPDT switch control support
+  - Added BLE LP firmware (LPFW) API
+
+- **System / RTOS**
+  - Added a configurable threshold to flag tasks that remain in ready state for too long
+
+- **Flash**
+  - Added IS25LP01GJ flash support for BL618DG
+
+### Bug Fixes
+
+- **OTA / FOTA**
+  - OTA start now rejects duplicate invocations
+  - Serialized SHA mode switching during OTA
+  - Fixed BL602 OTA stability by reworking RAM layout and keeping SHA link descriptors in OCRAM
+
+- **WiFi**
+  - Fixed BL618DG WFA memory overlap by isolating Wi-Fi buffers in dedicated RAM with linker checks
+  - Disabled high ISR stack for BL618DG WFA builds
+  - Fixed reflected station packets being processed after deaggregation
+  - Fixed BL616 iperf assert and TCP RX resource lifetime issue
+  - Fixed retry attempts when the virtual interface is disabled or disconnected
+  - Fixed scan adding entries from the wrong PHY channel
+
+- **BL616CL**
+  - Fixed MFG temperature sensor and PDS API issues
+  - Fixed MFG SDIO/USB compile errors
+  - Fixed MFG Wi-Fi TX and RF temperature calibration loop
+  - Fixed temperature sensor offset values on BL616CL and BL618DG
+  - Fixed temperature sensor issues in ADC v2/v3 examples
+
+- **BL618DG**
+  - Disabled Wi-Fi PLL fine-tuning on B0 silicon
+  - Fixed CPU PLL clock calculation using floating-point
+  - Fixed EMAC clock invert bit
+  - Fixed channel data leftover handling
+
+- **Bluetooth**
+  - BLE stack now uses runtime local ATT MTU for GATT exchange
+
+- **Zigbee / 802.15.4**
+  - Fixed TCLK callback being invoked while erasing TCLK
+  - Corrected BL702 monitor timeout calculation
+
+- **USB**
+  - Updated USB descriptor API usage in AT module
+  - Removed redundant USB host serial source
+
+- **Demo / Examples**
+  - Enabled EasyFlash support in nethub demo
+
+### Improvements
+
+- **WiFi / Networking**
+  - Optimized nethub Wi-Fi throughput with hot-code placement and build tuning
+  - Updated Wi-Fi MAC default configuration for BL618DG
+  - Gated nested IRQ handling on high ISR stack
+  - Tuned combo memory usage to free more RAM for other components
+  - Updated Wi-Fi MAC integration for the new ADC temperature sensor API on BL616CL
+
+- **Bluetooth**
+  - Allowed external control of BLE simple logging on BL702L
+  - BLE now tracks whether the next wake is for event programming
+  - Resolved BLE stack symbol name conflicts
+
+- **RF**
+  - Updated RF PHY libraries for BL616 and BL616CL
+
+- **BL618DG**
+  - Unified PDS and jump app paths in low-power firmware example
+
+- **System**
+  - Moved small read-only data to TCM to reduce RAM usage
+
+- **Tools**
+  - Added support for Zephyr toolchain
+  - Updated firmware post-processing tool to v1.4.4
+
+## v2.3.30 — since v2.3.29 (2026-07-15 → 2026-07-27)
+
+### New Features
+
+- **WiFi**
+  - Added retry count limit support
+  - Added MAC TX and RX test support in MFG mode
+  - Added RX/TX flow control dump for debugging
+  - Added BL616CL CCA threshold and AC1 REC adaptive control
+
+- **Display / LVGL**
+  - Unified LVGL display layer and pin initialization across boards
+  - Added ACM as data source and ECM for BL618DG LVGL demo
+  - Added PEC DVP camera to MIPI DSI LCD example
+
+- **Camera**
+  - Merged PEC DVP CAM HSYNC sampling mode into hsync_dly
+
+- **Zigbee / 802.15.4**
+  - Updated Zigbee example for Zigbee component release
+  - Added 802.15.4 and MAC TRX to configuration
+
+- **BL618DG**
+  - Added BLE LP firmware info recording and query API
+  - Implemented hardware K 32K interface
+  - Added xtal 32K counter APIs
+
+- **Debug / Tools**
+  - Reduced backtrace cost stack size using binary search in unwind table
+
+- **Flash**
+  - Added XM25UH32D flash support for BL616CL
+
+- **RF OTA**
+  - Added RF OTA test firmware example
+
+### Bug Fixes
+
+- **WiFi**
+  - Fixed memory leak when WPA send fails
+  - Fixed Nethub SDIO low UDP TX throughput and zero data drops
+  - Fixed off-by-one when disabling LWIP TX single pbuf
+  - Fixed credits handling in TX flow control
+  - Fixed empty HT MCS map handling in rate control
+  - Fixed BL618DG errno TLS issue in coexistence CLI
+  - Fixed AP country IE advertisement and deferred stop event
+  - Fixed VHT beamforming capability
+  - Fixed join scan not finding BSSID in first round
+  - Fixed CCA offset for SRRC compliance
+  - Fixed hardware MAC overwriting register on reset
+  - Fixed TX policy preservation across A-MPDU transitions
+  - Fixed RTS protection rate selection per RC step
+  - Fixed internal frame fallback rates initialization
+  - Fixed NULL notification for 70ms duration
+
+- **Low Power**
+  - Fixed low power assert
+
+- **BL616CL**
+  - Fixed power compensation API error
+
+- **Audio**
+  - Fixed audio example issues for BL618DG and BL616CL
+
+- **Camera**
+  - Updated cam_lcd for multi-chip compatibility
+
+- **Bluetooth**
+  - Fixed crash in BLE PDS init for BL702L
+  - Fixed BLE/BT power minimum value for BL616L and BL618DG
+
+### Improvements
+
+- **Networking**
+  - Optimized TCP TX memory efficiency
+  - Added LWIP_TCPIP_FORCE_TX_COPY configuration option
+  - Fixed netstat TCP memory usage reporting
+
+- **WiFi**
+  - WPA hexdump now always prints for easier debugging
+  - Raised WiFi connect task priorities
+  - Optimized zero-copy RX path for pbuf handling
+
+- **BL618DG**
+  - MFG mode now supports negative BT/BLE TX power values
+  - Updated RF switch GPIO for EVT2 hardware
+  - Removed unused temporary RF code
+
+- **System**
+  - Cleaned up AT module code for improved robustness
+  - Removed LP monitor context sections from linker scripts
+  - Added DVP I2C configuration macros for board GPIO headers
+
+## v2.3.29 — since v2.3.28 (2026-06-26 → 2026-07-15)
+
+### New Features
+
+- **BL618DG**
+  - Consolidated BZ coexistence demo
+
+- **Camera**
+  - Added BF3901 sensor and PEC DVP CAM capture support
+
+- **WiFi**
+  - Added BLE WiFi coexistence tests (WFA)
+  - Added P2P (WiFi Direct) feature
+
+- **Networking**
+  - Optimized IPv6 support for low power scenarios
+
+- **Display**
+  - Improved LVGL demo cases and DSI screen support
+
+- **BL616CL**
+  - Added GPIO interrupt watchdog test case
+
+- **Debug / Tools**
+  - Updated OpenOCD to support CJTAG
+  - Board serial log output can now be disabled
+
+- **Manufacturing**
+  - Added TX power compensation support in MFG mode
+
+### Bug Fixes
+
+- **WiFi**
+  - Adapted SPI WiFi fake write API
+  - Fixed TWT tick calculation
+  - Fixed WFA IRQ priority setup for BL618DG B0
+  - Fixed UART signal issue after boot2 log output
+  - Fixed support for more chip variants in WiFi low power flash config
+
+- **Audio**
+  - Fixed loop playback crash
+
+- **Low Power**
+  - Refined RC32K coarse calibration
+
+- **Build System**
+  - Fixed `make` and `ninja` first-time build failure
+  - Fixed compilation issues for SDIO/IPC on BL602 and BL618DG
+  - Fixed compilation issue for BL616CL
+  - Fixed various build failures
+
+- **BL618DG**
+  - Fixed WiFi-BLE switching in MFG mode
+  - Fixed power offset issue when no channel switch occurs in MFG
+
+- **WS2812**
+  - Fixed WS2812 LEDs only displaying blue
+
+### Improvements
+
+- **WiFi**
+  - Consolidated P2P code paths, retired legacy `CONFIG_WL80211_P2P` config
+  - Optimized WiFi TCP throughput
+  - Added WPA failure point logging for easier debugging
+  - Removed legacy "FW0" residue references throughout codebase
+
+- **BL618DG**
+  - Updated MFG version to 0.5
+  - Added RCAL RF parameter
+  - Separated lpfw_private library for ILP32D
+  - Demo now selects standalone or combo path based on macro
+
+- **System**
+  - Updated hibooster startup method
+  - Updated linker flash rodata object patterns
+
 ## v2.3.28 — since v2.3.27 (2026-06-07 → 2026-06-26)
 
 ### New Features

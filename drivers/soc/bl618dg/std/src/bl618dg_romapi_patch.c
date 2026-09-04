@@ -39,10 +39,9 @@
 #include "bl618dg_aon.h"
 #include "bl618dg_hbn.h"
 #include "bl618dg_pds.h"
+#include "bl618dg_glb.h"
 #include "bflb_ef_ctrl.h"
 
-#define  WHO_AM_I    (0x60f82800)
-#define  I_AM_A0     (0x0616d001)
 #define  PSRAM_X8_CTRL_WAIT_TIMEOUT 1000
 
 #if defined(CPU_MODEL_A0)
@@ -310,6 +309,120 @@ BL_Err_Type ATTR_TCM_SECTION AON_Set_Ldo09_Soc_Slow_Pulldown(uint8_t enable)
     return SUCCESS;
 }
 
+BL_Err_Type ATTR_TCM_SECTION AON_Ctrl_Ldo18_Aon_Mode_by_HW(uint8_t enable)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_LP_EN_HW);
+#if defined(CPU_MODEL_A0)
+    tmpVal ^= (0x7 << 4);
+#endif
+    if (enable == ENABLE) {
+        tmpVal = BL_SET_REG_BIT(tmpVal, AON_LDO18AON_LP_EN_AON_CTRL_HW);
+    } else {
+        tmpVal = BL_CLR_REG_BIT(tmpVal, AON_LDO18AON_LP_EN_AON_CTRL_HW);
+    }
+
+    BL_WR_REG(AON_BASE, AON_LP_EN_HW, tmpVal);
+
+    return SUCCESS;
+}
+
+BL_Err_Type ATTR_TCM_SECTION AON_Ctrl_Dcdc_Sys_Mode_by_HW(uint8_t enable)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_LP_EN_HW);
+#if defined(CPU_MODEL_A0)
+    tmpVal ^= (0x7 << 4);
+#endif
+    if (enable == ENABLE) {
+        tmpVal = BL_SET_REG_BIT(tmpVal, AON_DCDC12_LP_EN_AON_CTRL_HW);
+    } else {
+        tmpVal = BL_CLR_REG_BIT(tmpVal, AON_DCDC12_LP_EN_AON_CTRL_HW);
+    }
+
+    BL_WR_REG(AON_BASE, AON_LP_EN_HW, tmpVal);
+
+    return SUCCESS;
+}
+
+BL_Err_Type ATTR_TCM_SECTION AON_Ctrl_Ldo_Soc_Mode_by_HW(uint8_t enable)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_LP_EN_HW);
+#if defined(CPU_MODEL_A0)
+    tmpVal ^= (0x7 << 4);
+#endif
+    if (enable == ENABLE) {
+        tmpVal = BL_SET_REG_BIT(tmpVal, AON_LDO09SOC_LP_EN_AON_CTRL_HW);
+    } else {
+        tmpVal = BL_CLR_REG_BIT(tmpVal, AON_LDO09SOC_LP_EN_AON_CTRL_HW);
+    }
+
+    BL_WR_REG(AON_BASE, AON_LP_EN_HW, tmpVal);
+
+    return SUCCESS;
+}
+
+BL_Err_Type ATTR_TCM_SECTION AON_Set_Ldo18_Aon_Mode(uint8_t mode)
+{
+    uint32_t tmpVal;
+
+    CHECK_PARAM(IS_AON_LDO18_AON_MODE_TYPE(mode));
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_LP_EN_HW);
+#if defined(CPU_MODEL_A0)
+    tmpVal ^= (0x7 << 4);
+#endif
+
+    tmpVal = BL_CLR_REG_BIT(tmpVal, AON_LDO18AON_LP_EN_AON_CTRL_HW);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_LDO18AON_LP_EN_AON, mode);
+
+    BL_WR_REG(AON_BASE, AON_LP_EN_HW, tmpVal);
+
+    return SUCCESS;
+}
+
+BL_Err_Type ATTR_TCM_SECTION AON_Set_Dcdc_Sys_Mode(uint8_t mode)
+{
+    uint32_t tmpVal;
+
+    CHECK_PARAM(IS_AON_DCDC_SYS_MODE_TYPE(mode));
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_LP_EN_HW);
+#if defined(CPU_MODEL_A0)
+    tmpVal ^= (0x7 << 4);
+#endif
+
+    tmpVal = BL_CLR_REG_BIT(tmpVal, AON_DCDC12_LP_EN_AON_CTRL_HW);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_LP_EN_AON, mode);
+
+    BL_WR_REG(AON_BASE, AON_LP_EN_HW, tmpVal);
+
+    return SUCCESS;
+}
+
+BL_Err_Type ATTR_TCM_SECTION AON_Set_Ldo_Soc_Mode(uint8_t mode)
+{
+    uint32_t tmpVal;
+
+    CHECK_PARAM(IS_AON_LDO_SOC_MODE_TYPE(mode));
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_LP_EN_HW);
+#if defined(CPU_MODEL_A0)
+    tmpVal ^= (0x7 << 4);
+#endif
+
+    tmpVal = BL_CLR_REG_BIT(tmpVal, AON_LDO09SOC_LP_EN_AON_CTRL_HW);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_LDO09SOC_LP_EN_AON, mode);
+
+    BL_WR_REG(AON_BASE, AON_LP_EN_HW, tmpVal);
+
+    return SUCCESS;
+}
+
 BL_Err_Type ATTR_TCM_SECTION HBN_Enable_Dcdc09(uint8_t gpio)
 {
     uint32_t tmpVal;
@@ -351,6 +464,29 @@ BL_Err_Type ATTR_TCM_SECTION HBN_Set_Ldo09_Aon_Force_Off(uint8_t enable)
     return SUCCESS;
 }
 
+BL_Err_Type ATTR_CLOCK_SECTION HBN_Set_RC32K_Half_MSB(uint8_t enable)
+{
+    const uint32_t half_msb_mask = 1UL << (AON_RESV_AON_POS + 1U);
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_1);
+    if (enable) {
+        tmpVal |= half_msb_mask;
+    } else {
+        tmpVal &= ~half_msb_mask;
+    }
+    BL_WR_REG(AON_BASE, AON_1, tmpVal);
+
+    return SUCCESS;
+}
+
+uint8_t ATTR_CLOCK_SECTION HBN_Get_RC32K_Half_MSB(void)
+{
+    const uint32_t half_msb_mask = 1UL << (AON_RESV_AON_POS + 1U);
+
+    return (BL_RD_REG(AON_BASE, AON_1) & half_msb_mask) != 0U;
+}
+
 uint32_t bflb_ef_ctrl_get_common_trim_list(const bflb_ef_ctrl_com_trim_cfg_t **ptrim_list)
 {
     *ptrim_list = &trim_list[0];
@@ -373,9 +509,7 @@ int bflb_efuse_write_mac_address_opt(uint8_t slot, uint8_t mac[6], uint8_t progr
     uint8_t *machigh = (uint8_t *)(mac + 4);
     uint32_t tmpval;
     uint32_t i = 0, cnt;
-    uint32_t regval;
 
-    regval = getreg32(WHO_AM_I);
     if (slot >= 3) {
         return -1;
     }
@@ -393,21 +527,9 @@ int bflb_efuse_write_mac_address_opt(uint8_t slot, uint8_t mac[6], uint8_t progr
     if (slot == 0) {
         bflb_ef_ctrl_write_direct(NULL, 0x14, &tmpval, 1, program);
     } else if (slot == 1) {
-        if(regval == I_AM_A0)
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0xC0, &tmpval, 1, program);
-        }else
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0x110, &tmpval, 1, program);
-        }
+        bflb_ef_ctrl_write_direct(NULL, 0x110, &tmpval, 1, program);
     } else if (slot == 2) {
-        if(regval == I_AM_A0)
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0xC8, &tmpval, 1, program);
-        }else
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0x118, &tmpval, 1, program);
-        }
+        bflb_ef_ctrl_write_direct(NULL, 0x118, &tmpval, 1, program);
     }
 
     /* The high 16 bits */
@@ -423,21 +545,9 @@ int bflb_efuse_write_mac_address_opt(uint8_t slot, uint8_t mac[6], uint8_t progr
     if (slot == 0) {
         bflb_ef_ctrl_write_direct(NULL, 0x18, &tmpval, 1, program);
     } else if (slot == 1) {
-        if(regval == I_AM_A0)
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0xC4, &tmpval, 1, program);
-        }else
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0x114, &tmpval, 1, program);
-        }
+        bflb_ef_ctrl_write_direct(NULL, 0x114, &tmpval, 1, program);
     } else if (slot == 2) {
-        if(regval == I_AM_A0)
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0xCC, &tmpval, 1, program);
-        }else
-        {
-            bflb_ef_ctrl_write_direct(NULL, 0x11C, &tmpval, 1, program);
-        }
+        bflb_ef_ctrl_write_direct(NULL, 0x11C, &tmpval, 1, program);
     }
 
     return 0;
@@ -568,6 +678,170 @@ BL_Err_Type ATTR_CLOCK_SECTION PDS_Trim_RC32M(void)
 }
 
 /****************************************************************************/ /**
+ * @brief  Set the RC32K-to-XTAL counter averaging window
+ *
+ * @param  cycle: XTAL_CNT_32K.reg_total_32k_cycle[22:20]
+ *                0: 4 cycles, 1: 8 cycles, 2: 16 cycles, 3: 32 cycles,
+ *                4~7: 64 cycles
+ *
+ * @return SUCCESS
+ *
+ * @note   XTAL_CNT_32K is at PDS_BASE + 0x50 (0x4000E050). This field selects
+ *         how many 32K cycles are averaged when converting RC32K to XTAL cycles.
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Set_32K_Cycle(uint32_t cycle)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, PDS_REG_TOTAL_32K_CYCLE, cycle);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Enable hardware RC32K counting after PDS
+ *
+ * @return SUCCESS
+ *
+ * @note   Sets XTAL_CNT_32K.cr_pds_xtal_cnt_rc32k_en[24] at
+ *         PDS_BASE + 0x50 (0x4000E050). When enabled, hardware automatically
+ *         counts RC32K against the XTAL counter after PDS.
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Enable(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_SET_REG_BIT(tmpVal, PDS_CR_PDS_XTAL_CNT_RC32K_EN);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Disable hardware RC32K counting after PDS
+ *
+ * @return SUCCESS
+ *
+ * @note   Clears XTAL_CNT_32K.cr_pds_xtal_cnt_rc32k_en[24] at
+ *         PDS_BASE + 0x50 (0x4000E050).
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Disable(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_CLR_REG_BIT(tmpVal, PDS_CR_PDS_XTAL_CNT_RC32K_EN);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Get RC32K-to-XTAL counter done status
+ *
+ * @return SET if XTAL_CNT_32K.xtal_cnt_32k_done[30] is set, otherwise RESET
+ *
+ * @note   The done status is read from PDS_BASE + 0x50 (0x4000E050)[30] and is
+ *         also connected to IRQ[33]. Clear it through GLB_XTAL_DEG_32K[28]
+ *         (0x40000B80[28]); the clear bit was moved out of this PDS register.
+ *
+*******************************************************************************/
+BL_Sts_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Is_Done(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_GET_REG_BITS_VAL(tmpVal, PDS_XTAL_CNT_32K_DONE);
+
+    return tmpVal ? SET : RESET;
+}
+
+/****************************************************************************/ /**
+ * @brief  Get the RC32K-to-XTAL counter result
+ *
+ * @param  count: average 32K cycle count in XTAL cycles,
+ *                XTAL_CNT_32K.ro_xtal_cnt_32k_cnt[18:6]
+ * @param  res: residue in units of 1/64 XTAL cycle,
+ *              XTAL_CNT_32K.ro_xtal_cnt_32k_res[5:0]
+ *
+ * @return SUCCESS
+ *
+ * @note   Result fields are read from PDS_BASE + 0x50 (0x4000E050). The residue
+ *         corresponds to the averaging window selected by reg_total_32k_cycle.
+ *
+*******************************************************************************/
+BL_Err_Type PDS_Xtal_Cnt_32K_Get_Result(uint32_t *count, uint32_t *res)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    *count = BL_GET_REG_BITS_VAL(tmpVal, PDS_RO_XTAL_CNT_32K_CNT);
+    *res = BL_GET_REG_BITS_VAL(tmpVal, PDS_RO_XTAL_CNT_32K_RES);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Select top miscellaneous XTAL source
+ *
+ * @param  sel: GLB_XTAL_DEG_32K.top_misc_xtal_sel[9:8]
+ *
+ * @return SUCCESS
+ *
+*******************************************************************************/
+BL_Err_Type GLB_Set_Top_Misc_Xtal(uint8_t sel)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_TOP_MISC_XTAL_SEL, sel);
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Trigger an RC32K-to-XTAL counter process
+ *
+ * @return SUCCESS
+ *
+ * @note   The software trigger and done-clear controls were moved from
+ *         PDS XTAL_CNT_32K to GLB_XTAL_DEG_32K (0x40000B80):
+ *         [31] xtal_cnt_32k_sw_trig_ps is W1P and sets
+ *              PDS XTAL_CNT_32K.xtal_cnt_32k_process[29];
+ *         [28] clr_xtal_cnt_32k_done is W1P and clears
+ *              PDS XTAL_CNT_32K.xtal_cnt_32k_done[30];
+ *         [27] xtal_cnt_32k_cgen gates the counter clock.
+ *
+*******************************************************************************/
+BL_Err_Type GLB_Trigger_Xtal_Cnt_32K_Process(void)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_XTAL_CNT_32K_CGEN_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    /* Clear the previous PDS XTAL_CNT_32K.done status through GLB bit[28]. */
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_CLR_XTAL_CNT_32K_DONE_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    /* Start a new count process; GLB bit[31] drives PDS process bit[29]. */
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_XTAL_CNT_32K_SW_TRIG_PS_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
  * @brief  swap SPI1 MOSI with MISO
  *
  * @param  enable: ENABLE or DISABLE
@@ -692,6 +966,28 @@ float bflb_efuse_get_adc_gain_trim(struct bflb_device_s *dev)
         }
     }
     return coe;
+}
+
+/****************************************************************************/ /**
+ * @brief  Efuse read adc tsen trim
+ *
+ * @param  None
+ *
+ * @return int
+ *
+*******************************************************************************/
+uint32_t bflb_efuse_get_adc_tsen_trim(void)
+{
+    bflb_ef_ctrl_com_trim_t trim;
+
+    bflb_ef_ctrl_read_common_trim(NULL, "tsen", &trim, 1);
+    if (trim.en) {
+        if (trim.parity == bflb_ef_ctrl_get_trim_parity(trim.value, trim.len)) {
+            return trim.value;
+        }
+    }
+
+    return 2300;
 }
 
 /****************************************************************************/ /**
@@ -1129,4 +1425,193 @@ BL_Err_Type ATTR_TCM_SECTION PDS_Set_All_WRAM_Retention(void)
     BL_WR_REG(PDS_BASE, PDS_RAM2, tmpVal);
 
     return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Whether MAC address slot is empty
+ *
+ * @param  slot: MAC address slot
+ * @param  reload: whether  reload to check
+ *
+ * @return 0 for all slots full,1 for others
+ *
+*******************************************************************************/
+uint8_t bflb_efuse_is_mac_address_slot_empty(uint8_t slot, uint8_t reload)
+{
+    uint32_t tmp1 = 0xffffffff, tmp2 = 0xffffffff;
+    uint32_t part1Empty = 0, part2Empty = 0;
+
+    if (slot == 0) {
+        bflb_ef_ctrl_read_direct(NULL, 0x14, &tmp1, 1, reload);
+        bflb_ef_ctrl_read_direct(NULL, 0x18, &tmp2, 1, reload);
+    } else if (slot == 1) {
+        bflb_ef_ctrl_read_direct(NULL, 0x110, &tmp1, 1, reload);
+        bflb_ef_ctrl_read_direct(NULL, 0x114, &tmp2, 1, reload);
+    } else if (slot == 2) {
+        bflb_ef_ctrl_read_direct(NULL, 0x118, &tmp1, 1, reload);
+        bflb_ef_ctrl_read_direct(NULL, 0x11C, &tmp2, 1, reload);
+    }
+
+    part1Empty = (bflb_ef_ctrl_is_all_bits_zero(tmp1, 0, 32));
+    part2Empty = (bflb_ef_ctrl_is_all_bits_zero(tmp2, 0, 22));
+
+    return (part1Empty && part2Empty);
+}
+
+/****************************************************************************/ /**
+ * @brief  Efuse read optional MAC address
+ *
+ * @param  slot: MAC address slot
+ * @param  mac[6]: MAC address buffer
+ * @param  reload: Whether reload
+ *
+ * @return 0 or -1
+ *
+*******************************************************************************/
+int bflb_efuse_read_mac_address_opt(uint8_t slot, uint8_t mac[6], uint8_t reload)
+{
+    uint8_t *maclow = (uint8_t *)mac;
+    uint8_t *machigh = (uint8_t *)(mac + 4);
+    uint32_t tmpval = 0;
+    uint32_t i = 0;
+    uint32_t cnt = 0;
+
+    if (slot >= 3) {
+        return -1;
+    }
+
+    if (slot == 0) {
+        bflb_ef_ctrl_read_direct(NULL, 0x14, &tmpval, 1, reload);
+    }else if (slot == 1) {
+        bflb_ef_ctrl_read_direct(NULL, 0x110, &tmpval, 1, reload);
+    }else if (slot == 2) {
+        bflb_ef_ctrl_read_direct(NULL, 0x118, &tmpval, 1, reload);
+    }
+    BL_WRWD_TO_BYTEP(maclow, tmpval);
+
+    if (slot == 0) {
+        bflb_ef_ctrl_read_direct(NULL, 0x18, &tmpval, 1, reload);
+    }else if (slot == 1) {
+        bflb_ef_ctrl_read_direct(NULL, 0x114, &tmpval, 1, reload);
+    }else if (slot == 2) {
+        bflb_ef_ctrl_read_direct(NULL, 0x11C, &tmpval, 1, reload);
+    }
+
+    machigh[0] = tmpval & 0xff;
+    machigh[1] = (tmpval >> 8) & 0xff;
+
+    /* Check parity */
+    for (i = 0; i < 6; i++) {
+        cnt += bflb_ef_ctrl_get_byte_zero_cnt(mac[i]);
+    }
+
+    if ((cnt & 0x3f) == ((tmpval >> 16) & 0x3f)) {
+        /* Change to network order */
+        for (i = 0; i < 3; i++) {
+            tmpval = mac[i];
+            mac[i] = mac[5 - i];
+            mac[5 - i] = tmpval;
+        }
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+/****************************************************************************/ /**
+ * @brief  Select wl x clock source
+ *
+ * @param  clkSel:
+ *           @arg GLB_WL_MCU_XCLK_RC32M
+ *           @arg GLB_WL_MCU_XCLK_XTAL
+ *
+ * @return SUCCESS or ERROR
+ *
+*******************************************************************************/
+void ATTR_CLOCK_SECTION GLB_Set_WIFIPLL_Fine_Tune(void)
+{
+    uint32_t tmpVal;
+
+#if defined(CPU_MODEL_A0)
+    /* WIFIPLL HW CTRL @ 0x200010D4 */
+    tmpVal = BL_RD_WORD(RF_BASE + RF_ANA1_WIFIPLL_HW_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_VCO_RSHT_EN_TX, 0);   /* [12]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_VCO_RSHT_EN_TX_BZ, 0);/* [16]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_PI_BYPASS_RX_BZ, 1);  /* [6]   = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_PI_BYPASS_RX, 1);     /* [2]   = 1 */
+    BL_WR_WORD(RF_BASE + RF_ANA1_WIFIPLL_HW_CTRL_OFFSET, tmpVal);
+
+    /* WIFIPLL PI/SDM/LMS @ 0x200010E4 */
+    tmpVal = BL_RD_WORD(RF_BASE + RF_ANA1_WIFIPLL_PI_SDM_LMS_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_PI_BYPASS, 1);        /* [31]  = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_BYPASS, 0);       /* [24]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_FORCE_EN, 0);/* [23]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_EN, 0);      /* [22]  = 0 */
+    BL_WR_WORD(RF_BASE + RF_ANA1_WIFIPLL_PI_SDM_LMS_OFFSET, tmpVal);
+#endif
+#if 0
+    /* WIFIPLL HW CTRL @ 0x200010D4 */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_WIFIPLL_HW_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_VCO_RSHT_EN_TX_BZ, 0);/* [16]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_PI_BYPASS_RX_BZ, 1);  /* [6]   = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_PI_BYPASS_RX, 1);     /* [2]   = 1 */
+    BL_WR_WORD(CCI_BASE + CCI_WIFIPLL_HW_CTRL_OFFSET, tmpVal);
+
+    /* WIFIPLL PI/SDM/LMS @ 0x200010E4 */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_WIFIPLL_PI_SDM_LMS_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_PI_BYPASS, 1);        /* [31]  = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_SDM_BYPASS, 0);       /* [24]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_SDM_DITH_FORCE_EN, 0);/* [23]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_SDM_DITH_EN, 0);      /* [22]  = 0 */
+    BL_WR_WORD(CCI_BASE + CCI_WIFIPLL_PI_SDM_LMS_OFFSET, tmpVal);
+#endif
+#if 0
+    /* should be set on system init, not here */
+    /* RC32M reserved @ 0x2008F994[25] = 1 (within field [31:24]) */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_RC32M_CTRL1_AON_OFFSET);
+    val |= (1U << (25));
+    BL_WR_WORD(AON_BASE + AON_RC32M_CTRL1_AON_OFFSET, tmpVal);
+#endif
+    /* DCDC12 @ 0x2008F83C: VPFM=1, VC_CLAMP_VTH=3 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_3_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_VPFM_AON, 1);              /* [19:16] = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_VC_CLAMP_VTH_AON, 3);      /* [2:0]   = 3 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_3_OFFSET, tmpVal);
+
+    /* DCDC12 @ 0x2008F830: BM_NM=7, ISENSE_TRIM=3 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_0_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_BM_NM_AON, 7);             /* [6:4]   = 7 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_ISENSE_TRIM_AON, 3);       /* [30:28] = 3 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_0_OFFSET, tmpVal);
+
+    /* DCDC12 @ 0x2008F834: OSC_2M_MODE=1, OSC_EN_INHIBIT_T2=0, OCP_VTH=1, LP_FORCE_EN=0 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_1_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_OSC_2M_MODE_AON, 1);       /* [20]    = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_OSC_EN_INHIBIT_T2_AON, 0); /* [21]    = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_OCP_VTH_AON, 1);           /* [18:16] = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_LP_FORCE_EN_AON, 0);       /* [1]     = 0 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_1_OFFSET, tmpVal);
+
+    /* DCDC12 @ 0x2008F838: RC_SEL=4, SSTART_TIME=1 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_2_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_RC_SEL_AON, 4);            /* [15:12] = 4 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_SSTART_TIME_AON, 1);       /* [29:28] = 1 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_2_OFFSET, tmpVal);
+
+#if 0
+    /* should be set on system init, not here */
+    /* LDO08AON @ 0x2008F80C: interpret 4'h12 as TRIM=1, SEL=2 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_0_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_LDO08AON_VOUT_SEL_AON, 0xC);      /* [27:24] = 12 */
+    BL_WR_WORD(AON_BASE + AON_0_OFFSET, tmpVal);
+#endif
+
+    /* CPUPLL tweaks */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_LF_VCTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_MOM_UPDATE_PERIOD, 3);     /* 0x200087D8[1:0] = 3 */
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_LF_VCTRL_OFFSET, tmpVal);
+
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SPD_FCAL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_COARSE_GAIN, 3);           /* 0x200087D4[30:29] = 3 */
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_SPD_FCAL_OFFSET, tmpVal);
 }

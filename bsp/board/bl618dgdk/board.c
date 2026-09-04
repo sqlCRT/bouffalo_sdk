@@ -3,11 +3,6 @@
 /* Use board_overlay.c instead of this file */
 #else
 
-#ifdef CONFIG_CONSOLE_WO
-#include "bflb_wo.h"
-#else
-#include "bflb_uart.h"
-#endif
 #include "bflb_gpio.h"
 #include "bflb_clock.h"
 #include "bflb_rtc.h"
@@ -30,6 +25,14 @@
 
 #include "mm.h"
 
+#ifdef CONFIG_BSP_CONSOLE_USB_CDC
+#include "usb_console.h"
+#elif defined(CONFIG_CONSOLE_WO)
+#include "bflb_wo.h"
+#else
+#include "bflb_uart.h"
+#endif
+
 extern void log_start(void);
 
 extern uint32_t __HeapBase;
@@ -46,12 +49,6 @@ extern uint32_t __psram_data_start__;
 extern uint32_t __psram_data_end__;
 extern uint32_t __psram_noinit_start__;
 extern uint32_t __psram_noinit_end__;
-#endif
-
-#ifdef CONFIG_CONSOLE_WO
-static struct bflb_device_s *wo;
-#else
-static struct bflb_device_s *uart;
 #endif
 
 #if (defined(CONFIG_LUA) || defined(CONFIG_BFLB_LOG) || defined(CONFIG_FATFS))
@@ -356,19 +353,28 @@ void bl_show_component_version(void)
     }
 }
 
-#ifdef CONFIG_CONSOLE_WO
+#if defined(CONFIG_BSP_CONSOLE_USB_CDC)
+/* USB console is initialized after interrupts are restored. */
+#elif defined(CONFIG_CONSOLE_WO)
+
 extern void bflb_wo_set_console(struct bflb_device_s *dev);
-#else
-extern void bflb_uart_set_console(struct bflb_device_s *dev);
-#endif
 
 static void __attribute__((unused)) console_init()
 {
-#ifdef CONFIG_CONSOLE_WO
+    struct bflb_device_s *wo;
+
     wo = bflb_device_get_by_name("wo");
     bflb_wo_uart_init(wo, CONFIG_CONSOLE_UART_BAUDRATE, GPIO_PIN_11);
     bflb_wo_set_console(wo);
+}
+
 #else
+
+extern void bflb_uart_set_console(struct bflb_device_s *dev);
+
+static void __attribute__((unused)) console_init()
+{
+    struct bflb_device_s *uart;
 
 #if defined(CPU_AP)
     board_ap_console_gpio_init();
@@ -397,8 +403,9 @@ static void __attribute__((unused)) console_init()
 
     bflb_uart_init(uart, &cfg);
     bflb_uart_set_console(uart);
-#endif
 }
+
+#endif
 
 #ifdef LP_APP
 void board_recovery(void)
@@ -535,8 +542,7 @@ void bflb_wfa_init(void)
     extern void interrupt1_handler(void);
     bflb_irq_attach(MAC_INT_PROT_TRIGGER_IRQn, (irq_callback)interrupt1_handler, NULL);
     bflb_irq_enable(MAC_INT_PROT_TRIGGER_IRQn);
-    extern void csi_vic_set_prio(int32_t IRQn, uint32_t priority);
-    csi_vic_set_prio(MAC_INT_PROT_TRIGGER_IRQn, 2);
+    bflb_irq_set_priority(MAC_INT_PROT_TRIGGER_IRQn, 2, 2);
 }
 #endif
 
@@ -633,8 +639,15 @@ void board_init(void)
     bflb_wfa_init();
 #endif
 
-    /* console init (uart or wo) */
+    /* Release GPIO33 left by boot2 UART TX log to free UART SIG9. */
+    struct bflb_device_s *gpio;
+    gpio = bflb_device_get_by_name("gpio");
+    bflb_gpio_deinit(gpio, GPIO_PIN_33);
+
+    /* USB console mode leaves the AP UART TX/RX pins available to the application. */
+#ifndef CONFIG_BSP_CONSOLE_USB_CDC
     console_init();
+#endif
 
     /* config chip pod */
     bflb_irq_attach(BOD_IRQn, system_bod_isr, NULL);
@@ -645,7 +658,9 @@ void board_init(void)
     ram_heap_init();
 
     /* boot info dump */
+#ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
     bl_show_log();
+#endif
     /* version info dump */
     bl_show_component_version();
 
@@ -692,6 +707,10 @@ void board_init(void)
 #endif
     bflb_irq_restore(flag);
 
+#ifdef CONFIG_BSP_CONSOLE_USB_CDC
+    usb_console_init();
+#endif
+
     printf("board init done\r\n");
     printf("===========================\r\n");
 }
@@ -716,12 +735,16 @@ void board_init(void)
     bflb_irq_enable(WIFI_IRQn);
 #endif
 
+#ifndef CONFIG_BSP_CONSOLE_USB_CDC
     console_init();
+#endif
 
     /* ram and heap init (including psram) */
     ram_heap_init();
 
+#ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
     bl_show_log();
+#endif
 
     printf("uart  sig1:%08x, sig2:%08x\r\n", getreg32(GLB_BASE + GLB_UART_CFG1_OFFSET),
            getreg32(GLB_BASE + GLB_UART_CFG2_OFFSET));
@@ -730,6 +753,10 @@ void board_init(void)
     log_start();
 
     bflb_irq_restore(flag);
+
+#ifdef CONFIG_BSP_CONSOLE_USB_CDC
+    usb_console_init();
+#endif
 
     printf("board init done\r\n");
     printf("===========================\r\n");
@@ -744,12 +771,16 @@ void board_init(void)
 
     /* ram heap init */
 
+#ifndef CONFIG_BSP_CONSOLE_USB_CDC
     console_init();
+#endif
 
     /* heap init */
     ram_heap_init();
 
+#ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
     bl_show_log();
+#endif
 
     //printf("lp does not use memheap due to little ram \r\n");
 
@@ -759,6 +790,10 @@ void board_init(void)
            getreg32(GLB_BASE + GLB_CGEN_CFG2_OFFSET));
 
     log_start();
+
+#ifdef CONFIG_BSP_CONSOLE_USB_CDC
+    usb_console_init();
+#endif
 }
 #endif
 

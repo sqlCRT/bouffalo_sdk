@@ -32,6 +32,8 @@ void board_i2s_gpio_init(void);
 void board_timer_gpio_init(void);
 void board_canfd_gpio_init(int idx);
 
+#define BOARD_DVP_USE_I2C BFLB_NAME_I2C1
+
 #define BOARD_USB_VIA_GPIO
 void board_usb_gpio_init(void);
 
@@ -39,8 +41,11 @@ void board_usb_gpio_init(void);
 #define PEC_I2C_SDA_PIN         GPIO_PIN_10
 void board_pec_i2c_gpio_init(void);
 
-#define PEC_IR_PIN              GPIO_PIN_10
+#define PEC_IR_PIN              GPIO_PIN_6
 void board_pec_ir_gpio_init(void);
+
+#define PEC_IR_RX_PIN           GPIO_PIN_7
+void board_pec_ir_rx_gpio_init(void);
 
 #define PEC_PWM_CH0_PIN         GPIO_PIN_6
 #define PEC_PWM_CH1_PIN         GPIO_PIN_10
@@ -112,6 +117,12 @@ void board_pec_dpi_gpio_init(void);
 #define PEC_SRGB_VSYNC_PIN GPIO_PIN_26
 #define PEC_SRGB_DE_PIN    GPIO_PIN_27
 void board_pec_srgb_gpio_init(void);
+
+#define PEC_DVP_CAM_VSYNC_PIN GPIO_PIN_9
+#define PEC_DVP_CAM_HSYNC_PIN GPIO_PIN_10
+#define PEC_DVP_CAM_PCLK_PIN  GPIO_PIN_8
+#define PEC_DVP_CAM_DATA0_PIN GPIO_PIN_7
+void board_pec_dvp_cam_gpio_init(void);
 
 void board_i2s_codec_gpio_init(void);
 

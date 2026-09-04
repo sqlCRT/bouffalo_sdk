@@ -37,9 +37,9 @@
  *         frame_size_words = frame_size / 4  (max 65535 = 262KB)
  *         ra_offset = binary_search(non_standard_ra_table, entry_idx)
  *
- *   IMPORTANT: Leaf functions (frame_size=0) are NOT in the table
- *   - During backtrace, if PC is not found, it's a leaf function
- *   - For leaf function: PC = [SP], SP unchanged, continue unwind
+ *   IMPORTANT: Leaf functions (frame_size=0) are NOT in the table.
+ *   Unwinding one requires x1/RA from a saved register context; RA cannot be
+ *   inferred from the word at SP.
  *
  *   File layout:
  *     - Entries start immediately after segment table (no padding)
@@ -80,6 +80,7 @@ static non_standard_ra_entry_t *g_non_standard_ra_table = NULL;
 static uint16_t g_num_non_standard_ra_entries = 0;
 static const uint8_t *g_entries_data = NULL;
 static const uint8_t *g_segment_table_start = NULL;  /* For parsing segments on demand */
+static uint32_t g_num_segments = 0;
 
 /**
  * Initialize non-standard RA table from binary data
@@ -141,35 +142,47 @@ static inline bool is_segment_terminator(const uint8_t *ptr)
 }
 
 /**
- * Parse segment table
+ * Find one segment directly in the sorted CFI segment table.
+ *
+ * Keeping the table in flash avoids copying up to 64 descriptors (384 bytes)
+ * to the backtrace stack. The generator sorts descriptors by segment_base, so
+ * the runtime can use binary search without allocating an index in RAM.
  */
-static bool parse_segments(const uint8_t **ptr, segment_desc_t *segments, int *num_segments)
+static bool lookup_segment(uint16_t segment_base, segment_desc_t *segment)
 {
-    *num_segments = 0;
+    uint32_t left = 0;
+    uint32_t right = g_num_segments;
 
-    while (*num_segments < 64) {
-        /* Check for terminator */
-        if (is_segment_terminator(*ptr)) {
-            *ptr += 12;  /* Skip 3 × 4 bytes */
-            break;
-        }
-
-        /* Parse segment descriptor */
-        segments[*num_segments].segment_base = *(uint16_t*)*ptr;
-        segments[*num_segments].start_entry_idx = *(uint16_t*)(*ptr + 2);
-        segments[*num_segments].end_entry_idx = *(uint16_t*)(*ptr + 4);
-
-        *ptr += 6;
-        (*num_segments)++;
+    if (g_segment_table_start == NULL || segment == NULL) {
+        return false;
     }
 
-    return *num_segments > 0;
+    while (left < right) {
+        uint32_t mid = left + (right - left) / 2;
+        const uint8_t *ptr = g_segment_table_start + mid * 6;
+        uint16_t mid_segment_base = *(uint16_t *)ptr;
+
+        if (mid_segment_base == segment_base) {
+            segment->segment_base = mid_segment_base;
+            segment->start_entry_idx = *(uint16_t *)(ptr + 2);
+            segment->end_entry_idx = *(uint16_t *)(ptr + 4);
+            return true;
+        }
+
+        if (mid_segment_base < segment_base) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    return false;
 }
 
 /**
  * Initialize unwind table from binary data
- * Only parses non-standard RA table and entries data location.
- * Segments are parsed on each backtrace call to save RAM.
+ * Parses the non-standard RA table and counts segment descriptors.
+ * Segment descriptors remain in the CFI table to save RAM.
  */
 bool unwind_table_init(const uint8_t *data)
 {
@@ -188,15 +201,14 @@ bool unwind_table_init(const uint8_t *data)
 #endif
     if (!init_non_standard_ra_table(&ptr)) return false;
 
-    /* Save segment table start position for later parsing */
+    /* Save the sorted segment table and count its descriptors. */
     g_segment_table_start = ptr;
+    g_num_segments = 0;
 
-    /* Find entries data start (skip segment table) */
-    /* We need to parse segment table to find where entries start */
-    /* But we don't store segments, just find the end marker */
+    /* Find entries data start without copying descriptors to RAM. */
     while (!is_segment_terminator(ptr)) {
-        /* Skip segment descriptors until terminator */
         ptr += 6;
+        g_num_segments++;
     }
     ptr += 12;  /* Skip terminator (3 × 4 bytes) */
 
@@ -224,7 +236,7 @@ bool unwind_table_init(const uint8_t *data)
  * IMPORTANT: Leaf functions (frame_size=0) are NOT in the table
  * - Returns false if entry not found (caller should treat as leaf function)
  */
-bool find_unwind_entry(uint32_t pc, const segment_desc_t *segments, int num_segments, unwind_entry_t *entry)
+bool find_unwind_entry(uint32_t pc, unwind_entry_t *entry)
 {
     if (g_entries_data == NULL) {
         fprintf(stderr, "Error: Unwind table not initialized\n");
@@ -235,22 +247,15 @@ bool find_unwind_entry(uint32_t pc, const segment_desc_t *segments, int num_segm
     uint16_t pc_segment_id = pc >> 16;
     uint16_t pc_offset = pc & 0xFFFF;
 
-    /* 2. Find matching segment */
-    const segment_desc_t *seg = NULL;
-    for (int i = 0; i < num_segments; i++) {
-        if (segments[i].segment_base == pc_segment_id) {
-            seg = &segments[i];
-            break;
-        }
-    }
-
-    if (seg == NULL) {
+    /* 2. Find the matching segment in the sorted CFI table. */
+    segment_desc_t segment;
+    if (!lookup_segment(pc_segment_id, &segment)) {
         return false;  /* No matching segment */
     }
 
     /* 3. Binary search to find function entry containing PC */
-    uint16_t left = seg->start_entry_idx;
-    uint16_t right = seg->end_entry_idx;
+    uint16_t left = segment.start_entry_idx;
+    uint16_t right = segment.end_entry_idx;
     uint16_t best_match = 0xFFFF;  /* Invalid index */
     uint16_t best_offset = 0;
 
@@ -297,6 +302,14 @@ bool find_unwind_entry(uint32_t pc, const segment_desc_t *segments, int num_segm
     uint16_t frame_size_words = *(uint16_t*)(entry_ptr + 2);
     uint16_t func_size = *(uint16_t*)(entry_ptr + 4);
 
+    /* The preceding entry may belong to a different function.  Leaf functions
+     * are omitted from the table, so validate the complete [start, end) range. */
+    uint32_t function_start = ((uint32_t)pc_segment_id << 16) | best_offset;
+    if (pc < function_start ||
+        pc - function_start >= (uint32_t)func_size) {
+        return false;
+    }
+
     entry->offset_in_segment = best_offset;
     entry->frame_size_words = frame_size_words;
     entry->func_size = func_size;
@@ -321,30 +334,20 @@ bool find_unwind_entry(uint32_t pc, const segment_desc_t *segments, int num_segm
 /**
  * Unwind one stack frame
  *
- * IMPORTANT: Leaf functions (frame_size=0) are NOT in the CFI table
- * - If find_unwind_entry returns false, PC is in a leaf function
- * - For leaf function: RA is at [SP], SP unchanged, continue unwind
+ * IMPORTANT: Leaf functions (frame_size=0) are NOT in the CFI table.
+ * A missing entry cannot be unwound without an RA supplied by the saved
+ * register context; RA is not necessarily stored at SP.
  */
 bool unwind_frame(uint32_t pc, uint32_t sp,
-                  const segment_desc_t *segments, int num_segments,
                   uint32_t *new_pc, uint32_t *new_sp)
 {
     unwind_entry_t entry;
 
-    if (!find_unwind_entry(pc, segments, num_segments, &entry)) {
-        /* Entry not found - leaf function (not in table) */
-        /* For leaf function: RA is at [SP], SP unchanged */
-#ifdef STACK_READ
-        uint32_t ra = STACK_READ(sp);
-#else
-        uint32_t ra = *(uint32_t*)sp;
-#endif
-        *new_sp = sp;  /* SP unchanged */
-        *new_pc = ra;
+    if (!find_unwind_entry(pc, &entry)) {
 #if DEBUG
-        printf("  [LEAF] PC=0x%08x -> RA=0x%08x (not in table, RA at SP)\n", pc, ra);
+        printf("  [NO ENTRY] PC=0x%08x\n", pc);
 #endif
-        return true;
+        return false;
     }
 
     /* Normal function with stack frame */
@@ -367,49 +370,52 @@ bool unwind_frame(uint32_t pc, uint32_t sp,
     return true;
 }
 
-/**
- * Perform backtrace
- */
-int backtrace(uint32_t pc, uint32_t sp,
-              uint32_t *addrs, int max_frames,
-              const uint8_t *cfi_table_base)
+static bool is_valid_pc(uint32_t pc)
+{
+    return pc != 0 && pc != 0xFFFFFFFF && pc != 0xA5A5A5A5;
+}
+
+static int backtrace_internal(uint32_t pc, uint32_t sp,
+                              uint32_t initial_ra,
+                              uint32_t *addrs, int max_frames,
+                              const uint8_t *cfi_table_base)
 {
     int count = 0;
-    segment_desc_t segments[64];
-    int num_segments = 0;
-    const uint8_t *ptr;
 
     /* Initialize unwind table */
     if (cfi_table_base != NULL) {
         unwind_table_init(cfi_table_base);
     }
 
-    /* Parse segments from CFI table (on stack, not stored) */
-    /* Use saved segment table start position */
+    /* Use the saved segment table instead of copying it to the stack. */
     if (g_segment_table_start == NULL) {
         return 0;  /* Not initialized */
     }
-    ptr = g_segment_table_start;
-
-    /* Now parse segments */
-    if (!parse_segments(&ptr, segments, &num_segments)) {
+    if (g_num_segments == 0) {
         return 0;
     }
 
 #if DEBUG
     printf("\n=== Backtrace ===\n");
-    printf("Initial: PC=0x%08x, SP=0x%08x, Segments: %d\n\n", pc, sp, num_segments);
+    printf("Initial: PC=0x%08x, SP=0x%08x\n\n", pc, sp);
 #endif
 
-    while (count < max_frames && pc != 0 && pc != 0xFFFFFFFF && pc != 0xA5A5A5A5) {
+    while (count < max_frames && is_valid_pc(pc)) {
         addrs[count++] = pc;
 
         uint32_t new_pc, new_sp;
-        // In almost all cases, pc - 4 for get the current stack frame.
-        if (!unwind_frame(pc - 4, sp, segments, num_segments, &new_pc, &new_sp)) {
+        if (!unwind_frame(pc - 2, sp, &new_pc, &new_sp)) {
+            /* Only the first frame may use x1 saved with the task context.
+             * A frameless leaf keeps SP unchanged and returns through x1. */
+            if (initial_ra != 0) {
+                pc = initial_ra;
+                initial_ra = 0;
+                continue;
+            }
             break;
         }
 
+        initial_ra = 0;
         pc = new_pc;
         sp = new_sp;
     }
@@ -418,6 +424,28 @@ int backtrace(uint32_t pc, uint32_t sp,
     printf("\n=== Total: %d frames ===\n\n", count);
 #endif
     return count;
+}
+
+/**
+ * Perform backtrace using only stack-based unwind information.
+ */
+int backtrace(uint32_t pc, uint32_t sp,
+              uint32_t *addrs, int max_frames,
+              const uint8_t *cfi_table_base)
+{
+    return backtrace_internal(pc, sp, 0, addrs, max_frames,
+                              cfi_table_base);
+}
+
+/**
+ * Perform backtrace with x1/RA from a saved register context.
+ */
+int backtrace_with_ra(uint32_t pc, uint32_t sp, uint32_t initial_ra,
+                      uint32_t *addrs, int max_frames,
+                      const uint8_t *cfi_table_base)
+{
+    return backtrace_internal(pc, sp, initial_ra, addrs, max_frames,
+                              cfi_table_base);
 }
 
 /**

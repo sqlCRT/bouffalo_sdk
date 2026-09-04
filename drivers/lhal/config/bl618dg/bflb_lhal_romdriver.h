@@ -643,6 +643,7 @@ typedef enum {
     ((int32_t (*)(uint8_t *chip_type, uint8_t *chip_version)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_get_chip_type])
 
+#if 0
 #define romapi_bflb_dac_init \
     ((void (*)(struct bflb_device_s *dev, uint8_t clk_div)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_dac_init])
@@ -666,6 +667,7 @@ typedef enum {
 #define romapi_bflb_dac_set_value \
     ((void (*)(struct bflb_device_s *dev, uint8_t ch, uint16_t value)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_dac_set_value])
+#endif
 
 #define romapi_bflb_dbi_init \
     ((void (*)(struct bflb_device_s *dev, const struct bflb_dbi_config_s *config)) \
@@ -1123,9 +1125,11 @@ typedef enum {
     ((void (*)(void)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_l1c_dcache_enable])
 
+#if 0
 #define romapi_bflb_l1c_dcache_disable \
     ((void (*)(void)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_l1c_dcache_disable])
+#endif
 
 #define romapi_bflb_l1c_dcache_clean_all \
     ((void (*)(void)) \
@@ -1671,9 +1675,11 @@ typedef enum {
     ((uint32_t (*)(struct bflb_device_s *dev, uint32_t data)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_spi_poll_send])
 
+#if 0
 #define romapi_bflb_spi_poll_exchange \
     ((int (*)(struct bflb_device_s *dev, const void *txbuffer, void *rxbuffer, size_t nbytes)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_spi_poll_exchange])
+#endif
 
 #define romapi_bflb_spi_txint_mask \
     ((void (*)(struct bflb_device_s *dev, bool mask)) \
@@ -1927,6 +1933,7 @@ typedef enum {
     ((void (*)(struct bflb_device_s *dev, uint32_t int_type)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_wo_int_clear])
 
+#if 0
 #define romapi_bflb_flash_secreg_callapi_before \
     ((int (*)(const spi_flash_cfg_type *flash_cfg, struct callapi_content *content)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_flash_secreg_callapi_before])
@@ -1934,6 +1941,7 @@ typedef enum {
 #define romapi_bflb_flash_secreg_callapi_after \
     ((void (*)(const spi_flash_cfg_type *flash_cfg, struct callapi_content *content)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_flash_secreg_callapi_after])
+#endif
 
 #define romapi_bflb_flash_secreg_get_param \
     ((int (*)(uint32_t jid, const bflb_flash_secreg_param_t **param)) \

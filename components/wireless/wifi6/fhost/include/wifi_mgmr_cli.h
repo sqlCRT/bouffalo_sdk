@@ -29,9 +29,17 @@ void wifi_sta_ps_on_cmd(int argc, char *argv[]);
 void wifi_sta_ps_off_cmd(int argc, char *argv[]);
 void wifi_sta_ps_set_cmd(int argc, char **argv);
 void wifi_coex_enable_cmd(int argc, char *argv[]);
+void wifi_ap_coex_enable_cmd(int argc, char *argv[]);
 void wifi_coex_disable_cmd(int argc, char *argv[]);
 void wifi_coex_duty_set_cmd(int argc, char **argv);
 void wifi_coex_status_cmd(int argc, char **argv);
+#ifdef BL618DG
+void wifi_coex_bt_spdt_cmd(int argc, char **argv);
+void wifi_coex_bt_adj_pwr_cmd(int argc, char **argv);
+void wifi_coex_bt_adj_pwr_off_cmd(int argc, char **argv);
+void wifi_coex_bt_overlay_cmd(int argc, char **argv);
+void wifi_coex_bt_overlay_off_cmd(int argc, char **argv);
+#endif
 void wifi_sta_info_cmd(int argc, char *argv[]);
 void wifi_ap_sta_list_get_cmd(int argc, char *argv[]);
 void wifi_ap_sta_delete_cmd(int argc, char *argv[]);
@@ -67,6 +75,9 @@ void cmd_wifi_stats(int argc, char **argv);
 void cmd_wifi_get_tx_remaining(int argc, char *argv[]);
 void cmd_wifi_power_get(int argc, char **argv);
 void cmd_wifi_channel_get(int argc, char **argv);
+#if defined(BL616CL)
+void cmd_wifi_cca(int argc, char **argv);
+#endif
 #ifdef CONFIG_ANTDIV_STATIC
 void wifi_antenna_scan_cmd(int argc, char *argv[]);
 void wifi_antenna_scan_connect_cmd(int argc, char *argv[]);

@@ -516,6 +516,18 @@ struct fhost_vif_sta_cfg
 
     /* Extra flags passed to wpa_supplicant. See FHOST_WPA_SSID_* in fhost_wpa.h. */
     int wpa_flags;
+
+    /**
+     * Extra information elements appended to STA association requests.
+     *
+     * The buffer contains complete 802.11 information elements, including each
+     * element ID and length. Its contents are copied before
+     * @ref fhost_configure_vif returns. Set to NULL when @ref extra_ies_len is 0.
+     */
+    const uint8_t *extra_ies;
+
+    /** Length, in bytes, of the data referenced by @ref extra_ies. */
+    uint16_t extra_ies_len;
 };
 
 
@@ -608,6 +620,10 @@ struct fhost_vif_ap_cfg
      * (Ignored if not supported by selected AKM)
      */
     int mfp;
+    /**
+     * Country code for Country IE (e.g. "US"). Empty string = not set.
+     */
+    char country_code[3];
     /**
      * This fhost_vif_ap_cfg structure is transformed into wpa_supplicant configuration.
      * For clarity, not all configuration options provided by wpa_supplicant are exposed

@@ -1,45 +1,33 @@
 /**
  * @file filesystem_reader.c
- * @brief Read JPEG video frames pNNNN.jpg from SD card (FATFS).
+ * @brief Producer: read JPEG frames from SD (FATFS) into the empty->full buffer queue.
  *
- * Producer side of a 2-buffer producer/consumer pipeline:
- *   empty_queue -> [read file] -> full_queue -> (image_switch_task decodes) -> empty_queue
- *
- * FPS-stability: FAT32 f_open() does a linear directory scan, so opening from one
- * flat folder of ~9500 files gets slower with the frame index and the reader falls
- * behind the decoder over time. The frames are instead split into 100-frame chunk
- * sub-folders (pic/<res>/CCC/pNNNN.jpg, CCC=(N-1)/100), so each open scans only a
- * ~100-file folder regardless of frame number -> constant per-frame open cost.
- * (Run tools/chunk_pics.sh once to reorganize a flat directory into this layout.)
+ * Frames are split into 100-file chunk folders (<res>/CCC/pNNNN.jpg, CCC=(N-1)/100) so
+ * each FAT32 f_open() scans only ~100 entries -> constant per-frame cost (else a flat
+ * folder slows down with the frame index). Run tools/chunk_pics.sh once to lay this out.
  */
 
 #include "filesystem_reader.h"
+#include "dpi_manager.h"
 #include "bflb_mtimer.h"
 #include "bflb_gpio.h"
 #include "board.h"
 #include "fatfs_diskio_register.h"
 #include "ff.h"
-#include "lcd.h" 
+#include "lcd.h"
 #include "log.h"
+#include "video_config.h" /* customer knobs: FRAME_DIR, FRAMES_PER_CHUNK */
 
 #include <stdio.h>
 
-/* SDH bus width selection.
- *
- * On DPI panels the SDH data lines IO43/IO44 (DAT3/DAT2) are wired to the DPI
- * R7/R6 signals, so the two peripherals cannot share those pins. When DPI is
- * active the SD card must run in 1-line mode (CLK/CMD/DAT0/DAT1 on IO45-48),
- * leaving IO43/44 free for the panel. Other interfaces keep 4-line mode.
- *
- * Define SDH_BUS_WIDTH_1LINE to 0 or 1 in the build to override the default.
- *
- * NOTE: this switch only controls which SDH pins this example muxes; it does
- * NOT touch the SD core. The core (bsp/common/sdh/sd/sdh_sd.c) still negotiates
- * a 4-bit transfer via ACMD6 whenever the card reports 4-bit support, so with
- * only this change the controller is still told to use 4 data lines while
- * IO43/44 are not driven. On most cards 1-line transfers over DAT0 still work
- * because DAT2/DAT3 are not sampled for 1-block reads, but for a guaranteed
- * 1-line link the ACMD6 negotiation in sdh_sd.c must also be suppressed. */
+#if defined(CONFIG_FREERTOS)
+#include "task.h"
+#endif
+
+/* On DPI, SDH DAT3/DAT2 (IO43/44) clash with the panel's R7/R6, so SD runs 1-line
+ * (IO45-48) there and 4-line elsewhere; override via SDH_BUS_WIDTH_1LINE. NOTE: this
+ * only picks which pins are muxed -- sdh_sd.c still ACMD6-negotiates 4-bit, but 1-line
+ * DAT0 reads work anyway since DAT2/3 aren't sampled (suppress ACMD6 for a strict 1-line link). */
 #ifndef SDH_BUS_WIDTH_1LINE
 #if (LCD_INTERFACE_TYPE == LCD_INTERFACE_DPI)
 #define SDH_BUS_WIDTH_1LINE 1
@@ -49,9 +37,8 @@
 #endif
 
 #if SDH_BUS_WIDTH_1LINE
-/* 1-line SDH GPIO init: bring up CLK/CMD/DAT0/DAT1 on IO45-48 and deliberately
- * leave IO43/IO44 (DAT3/DAT2) unconfigured so the DPI panel keeps R7/R6. This
- * replaces board_sdh_gpio_init(), which would claim all six SDH pins. */
+/* Mux SDH CLK/CMD/DAT0/DAT1 on IO45-48 only, leaving IO43/44 for the DPI panel
+ * (replaces board_sdh_gpio_init(), which would claim all six SDH pins). */
 static void sdh_gpio_init_1line(void)
 {
     struct bflb_device_s *gpio = bflb_device_get_by_name("gpio");
@@ -63,28 +50,13 @@ static void sdh_gpio_init_1line(void)
 }
 #endif
 
-/* Frames live under /sd/<res>/CCC/pNNNN.jpg. Resolution follows the active panel:
- * DSI is 720x1280 portrait, DPI standard is 800x480 landscape. Put a JPEG sequence
- * matching the panel under the corresponding folder on the SD card. 
- * (384x768 480x960) (576x1024 720x1280) (172x640 none) (700x420 800x480) (960x540 1024x600) */
-#if (LCD_INTERFACE_TYPE == LCD_INTERFACE_DPI)
-#define FRAME_DIR        "/sd/1024x600"
-#else
-#define FRAME_DIR        "/sd/720x1280"
-#endif
-#define FRAMES_PER_CHUNK 100
-
-/* JPEG source buffers in PSRAM (MJDEC reads from here after a dcache clean). */
+/* FRAME_DIR and FRAMES_PER_CHUNK now live in video_config.h (customer-editable).
+ * JPEG source buffers in PSRAM (MJDEC reads from here after a dcache clean). */
 ATTR_NOINIT_PSRAM_SECTION __attribute__((aligned(32))) static uint8_t jpg_buffers[BUFFER_COUNT][JPG_BUFFER_SIZE];
 
 static jpg_buffer_t buffer_desc[BUFFER_COUNT];
 
 static uint32_t frame_count; /* highest frame number present (frames play 1..frame_count) */
-
-#if defined(CONFIG_FREERTOS)
-static QueueHandle_t full_buffer_queue = NULL;
-static QueueHandle_t empty_buffer_queue = NULL;
-#endif
 
 static FATFS fs;
 
@@ -122,9 +94,8 @@ static void frame_path(char *buf, size_t buflen, uint32_t frame_num)
     snprintf(buf, buflen, FRAME_DIR "/%03lu/p%04lu.jpg", (unsigned long)chunk, (unsigned long)frame_num);
 }
 
-/* Count playable frames by probing how far the pNNNN sequence goes. Frames are
- * contiguous from 1, so a binary search over "does frame N open?" finds the last
- * one in O(log n) opens instead of scanning all of them. */
+/* Count playable frames: they're contiguous from 1, so binary-search "does frame N
+ * open?" to find the last one in O(log n) opens instead of scanning all. */
 int filesystem_count_frames(void)
 {
     char path[48];
@@ -173,18 +144,9 @@ int filesystem_count_frames(void)
 int filesystem_reader_init(void)
 {
 #if defined(CONFIG_FREERTOS)
-    full_buffer_queue = xQueueCreate(BUFFER_COUNT, sizeof(jpg_buffer_t *));
-    empty_buffer_queue = xQueueCreate(BUFFER_COUNT, sizeof(jpg_buffer_t *));
-    if (full_buffer_queue == NULL || empty_buffer_queue == NULL) {
+    if (frame_buffer_pool_init(buffer_desc, jpg_buffers[0], BUFFER_COUNT, JPG_BUFFER_SIZE) != 0) {
         LOG_E("Failed to create buffer queues\r\n");
         return -1;
-    }
-    for (int i = 0; i < BUFFER_COUNT; i++) {
-        buffer_desc[i].data = jpg_buffers[i];
-        buffer_desc[i].size = 0;
-        buffer_desc[i].image_idx = 0;
-        jpg_buffer_t *buf_ptr = &buffer_desc[i];
-        xQueueSend(empty_buffer_queue, &buf_ptr, (TickType_t)0);
     }
     return 0;
 #else
@@ -193,16 +155,6 @@ int filesystem_reader_init(void)
 }
 
 #if defined(CONFIG_FREERTOS)
-QueueHandle_t filesystem_get_full_queue(void)
-{
-    return full_buffer_queue;
-}
-
-QueueHandle_t filesystem_get_empty_queue(void)
-{
-    return empty_buffer_queue;
-}
-
 void filesystem_reader_task(void *param)
 {
     FIL file;
@@ -231,7 +183,7 @@ void filesystem_reader_task(void *param)
     LOG_I("Reading " FRAME_DIR "/CCC/pNNNN.jpg ...\r\n");
 
     while (1) {
-        if (xQueueReceive(empty_buffer_queue, &buffer, (TickType_t)100) != pdTRUE) {
+        if (frame_buffer_get(&buffer, (TickType_t)100) != 0) {
             vTaskDelay(1);
             continue;
         }
@@ -243,7 +195,7 @@ void filesystem_reader_task(void *param)
         if (res != FR_OK) {
             /* missing frame: wrap to the start of the sequence */
             img_idx = 1;
-            xQueueSend(empty_buffer_queue, &buffer, (TickType_t)0);
+            frame_buffer_release(buffer);
             continue;
         }
 
@@ -252,13 +204,12 @@ void filesystem_reader_task(void *param)
 
         if (res == FR_OK && bytes_read > 0) {
             buffer->size = bytes_read;
-            buffer->image_idx = (uint16_t)img_idx;
-            if (xQueueSend(full_buffer_queue, &buffer, (TickType_t)10) != pdTRUE) {
-                xQueueSend(empty_buffer_queue, &buffer, (TickType_t)0);
+            if (frame_buffer_push(buffer, (TickType_t)10) != 0) {
+                frame_buffer_release(buffer);
             }
         } else {
             LOG_E("Failed to read frame %lu, error=%d\r\n", (unsigned long)img_idx, res);
-            xQueueSend(empty_buffer_queue, &buffer, (TickType_t)0);
+            frame_buffer_release(buffer);
         }
 
         if (++img_idx > frame_count) {

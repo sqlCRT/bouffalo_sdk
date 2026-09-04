@@ -3,6 +3,10 @@
 #include <stdint.h>
 #include "bflb_irq.h"
 
+#ifndef CONFIG_RC32K_CAL_ENABLE_HALF_MSB
+#define CONFIG_RC32K_CAL_ENABLE_HALF_MSB 1
+#endif
+
 #if defined(BL702)
 #include "bl702_lp.h"
 #elif defined(BL602)
@@ -38,6 +42,7 @@
 #define LPFW_WAKEUP_ACOMP               (1 << 5)
 #define LPFW_WAKEUP_BLE                 (1 << 6)
 #define LPFW_WAKEUP_LOSS_CFG_OVER       (1 << 7)
+#define LPFW_WAKEUP_CUSTOM_RX           (1 << 8)
 
 /* Conversion of units */
 #define BL_US_TO_PDS_CNT(us)  ((us) * 512 / 15625)  /* us * 32768 / 1000 /1000 */

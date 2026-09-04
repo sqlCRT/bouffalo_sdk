@@ -557,9 +557,11 @@ typedef enum {
     ((void (*)(void)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_l1c_dcache_enable])
 
+#if 0
 #define romapi_bflb_l1c_dcache_disable \
     ((void (*)(void)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_l1c_dcache_disable])
+#endif
 
 #define romapi_bflb_l1c_dcache_clean_all \
     ((void (*)(void)) \
@@ -597,9 +599,11 @@ typedef enum {
     ((void (*)(struct bflb_device_s *dev)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_rtc_disable])
 
+#if 0
 #define romapi_bflb_rtc_set_time \
     ((void (*)(struct bflb_device_s *dev, uint64_t time)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_rtc_set_time])
+#endif
 
 #define romapi_bflb_uart_init \
     ((void (*)(struct bflb_device_s *dev, const struct bflb_uart_config_s *config)) \
@@ -713,6 +717,7 @@ typedef enum {
     ((void (*)(struct bflb_device_s *dev)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_wdg_compint_clear])
 
+#if 0
 #define romapi_bflb_flash_secreg_callapi_before \
     ((int (*)(const spi_flash_cfg_type *flash_cfg, struct callapi_content *content)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_flash_secreg_callapi_before])
@@ -720,6 +725,7 @@ typedef enum {
 #define romapi_bflb_flash_secreg_callapi_after \
     ((void (*)(const spi_flash_cfg_type *flash_cfg, struct callapi_content *content)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_flash_secreg_callapi_after])
+#endif
 
 #define romapi_bflb_flash_secreg_get_param \
     ((int (*)(uint32_t jid, const bflb_flash_secreg_param_t **param)) \

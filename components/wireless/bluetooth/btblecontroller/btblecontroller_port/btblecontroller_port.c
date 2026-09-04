@@ -309,6 +309,46 @@ __attribute__((weak)) void btblecontroller_gpio_config(uint8_t pin, uint8_t is_h
         bflb_gpio_reset(gpio, pin);
     }
 }
+
+/**
+ * @brief Trigger RC32K XTAL counter calibration (setup phase)
+ * Configures registers to start counting RC32K cycles using XTAL as reference
+ */
+__attribute__((weak)) void btblecontroller_rc32k_xtal_count_trigger(void)
+{
+    GLB_Set_DIG_CLK_Sel(GLB_DIG_CLK_XCLK);
+
+    GLB_Set_Top_Misc_Xtal(0);
+    /* 64 RC32K cycles */
+    PDS_Set_32K_Cycle(4);
+    PDS_Xtal_Cnt_32K_Enable();
+
+    GLB_Trigger_Xtal_Cnt_32K_Process();
+}
+
+/**
+ * @brief Wait for RC32K XTAL counter calibration and get result
+ * @return xtal_cnt2 value (count result)
+ */
+__attribute__((weak)) uint16_t btblecontroller_rc32k_xtal_count_wait_result(void)
+{
+    uint64_t startUs;
+    uint32_t waitUs;
+    BL_Sts_Type done;
+    uint32_t xtal_cnt2 = 0;
+    uint32_t xtal_cnt2_res = 0;
+    uint32_t xtal_cnt2_x64 = 0;
+
+    startUs = btblecontroller_mtimer_get_time_us();
+    do {
+        done = PDS_Xtal_Cnt_32K_Is_Done();
+        waitUs = (uint32_t)(btblecontroller_mtimer_get_time_us() - startUs);
+    } while ((done == RESET) && (waitUs < 10000U));
+
+    /* Read count values */
+    PDS_Xtal_Cnt_32K_Get_Result(&xtal_cnt2, &xtal_cnt2_res);
+    xtal_cnt2_x64 = (xtal_cnt2 << 6) + xtal_cnt2_res;
+
+    return (uint16_t)xtal_cnt2;
+}
 #endif
-
-
