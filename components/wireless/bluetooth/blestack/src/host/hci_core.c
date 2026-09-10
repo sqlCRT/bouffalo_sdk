@@ -2362,7 +2362,7 @@ static int accept_sco_conn(const bt_addr_t *bdaddr, struct bt_conn *sco_conn, ui
 
 	cp->content_format = BT_VOICE_CVSD_16BIT;
 #if defined CONFIG_BT_HFP
-	if (!hfp_codec_msbc) {
+	if (hfp_codec_msbc) {
 		cp->max_latency = 0x000d;
 		cp->retrans_effort = 0x02;
 		cp->content_format = BT_VOICE_MSBC_16BIT;
@@ -5346,7 +5346,8 @@ static int br_init(void)
 		return -ENOBUFS;
 	}
 	lp_cp = net_buf_add(buf, sizeof(*lp_cp));
-	lp_cp->link_policy = sys_cpu_to_le16(BT_LINK_POLICY_ENABLE_ROLE_SWITCH);
+	lp_cp->link_policy = sys_cpu_to_le16(BT_LINK_POLICY_ENABLE_ROLE_SWITCH |
+					      BT_LINK_POLICY_ENABLE_SNIFF_MODE);
 	err = bt_hci_cmd_send_sync(BT_HCI_OP_WRITE_DEFAULT_LINK_POLICY, buf, NULL);
 	if (err) {
 		return err;
@@ -5519,6 +5520,7 @@ static int set_event_mask(void)
 		mask |= BT_EVT_MASK_REMOTE_NAME_REQ_COMPLETE;
 		mask |= BT_EVT_MASK_REMOTE_FEATURES;
 		mask |= BT_EVT_MASK_ROLE_CHANGE;
+		mask |= BT_EVT_MASK_MODE_CHANGE;
 		mask |= BT_EVT_MASK_PIN_CODE_REQ;
 		mask |= BT_EVT_MASK_LINK_KEY_REQ;
 		mask |= BT_EVT_MASK_LINK_KEY_NOTIFY;
@@ -8764,10 +8766,7 @@ int bt_br_conn_enter_sniff(struct bt_conn *conn, u16_t min_interval,
 	cp->attempt = sys_cpu_to_le16(4);
 	cp->timeout = sys_cpu_to_le16(1);
 
-	/* Sniff Mode is an asynchronous command: the controller replies with
-	 * Command Status and later a Mode Change event. Use the non-sync send.
-	 */
-	return bt_hci_cmd_send(BT_HCI_OP_SNIFF_MODE, buf);
+	return bt_hci_cmd_send_sync(BT_HCI_OP_SNIFF_MODE, buf, NULL);
 }
 
 int bt_br_conn_exit_sniff(struct bt_conn *conn)
@@ -8787,7 +8786,7 @@ int bt_br_conn_exit_sniff(struct bt_conn *conn)
 	cp = net_buf_add(buf, sizeof(*cp));
 	cp->handle = sys_cpu_to_le16(conn->handle);
 
-	return bt_hci_cmd_send(BT_HCI_OP_EXIT_SNIFF_MODE, buf);
+	return bt_hci_cmd_send_sync(BT_HCI_OP_EXIT_SNIFF_MODE, buf, NULL);
 }
 #endif /* BFLB_BREDR_PATCH_ENABLE_SNIFF_MODE */
 
