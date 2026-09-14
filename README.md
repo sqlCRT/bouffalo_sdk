@@ -2,6 +2,25 @@
 
 [中文版](README_zh.md)
 
+# DS5Dongle BL618 — Custom Patches
+
+This fork contains the following modifications for the DS5Dongle BL618 project (based on SDK v2.3.32):
+
+### Bluetooth (Classic BR/EDR)
+- **HID Host net_buf_pool** — Register `hid_tx_pool` / `hid_rx_pool` in `net_buf_pool` list for BT HID host
+- **L2CAP BR timeout** — Increase L2CAP BR configuration timeouts from 2s to 10s for reconnect reliability
+- **L2CAP BR send callback** — Add `bt_l2cap_br_chan_send_cb()` for HCI-ACK based flow control
+- **Sniff mode fixes** (cherry-pick from v2.3.33) — Fix SCO accept condition, enable sniff link policy, add `MODE_CHANGE` event mask, use sync send for sniff enter/exit
+
+### USB Audio
+- **Linux audio class compatibility** — Handle `SET_RES` / `SET_MIN` / `SET_MAX` audio class requests (fixes USB audio on Linux)
+
+### Flash Driver
+- **80MHz fallback** — Try 60MHz / 48MHz fallback when 80MHz flash clock fails
+- **PLL reset before probe** — Reset PLL to standard `sdmin` before fallback speed probe
+
+---
+
 # Introduction
 
 **BouffaloSDK** is the IOT and MCU software development kit provided by the Bouffalo Lab Team, supports all the series of Bouffalo chips. Also it is the combination of **bl_mcu_sdk** and **bl_iot_sdk** .
