@@ -2,6 +2,25 @@
 
 [English Version](README.md)
 
+# DS5Dongle BL618 — 自定义补丁
+
+本 fork 基于 SDK v2.3.32，为 DS5Dongle BL618 项目做了以下修改：
+
+### 蓝牙（经典 BR/EDR）
+- **HID Host net_buf_pool** — 注册 `hid_tx_pool` / `hid_rx_pool` 到 `net_buf_pool` 列表，解决 BT HID 主机缓冲区问题
+- **L2CAP BR 超时** — L2CAP BR 配置超时从 2s 增加到 10s，提升重连可靠性
+- **L2CAP BR 发送回调** — 新增 `bt_l2cap_br_chan_send_cb()`，基于 HCI-ACK 的流控
+- **Sniff 模式修复**（cherry-pick v2.3.33）— 修复 SCO 接受条件、启用 sniff 链路策略、添加 `MODE_CHANGE` 事件掩码、sniff 进出改用同步发送
+
+### USB 音频
+- **Linux 音频兼容** — 处理 `SET_RES` / `SET_MIN` / `SET_MAX` 音频类请求（修复 Linux 下 USB 音频不工作的问题）
+
+### Flash 驱动
+- **80MHz 降频回退** — 80MHz flash 时钟失败时自动尝试 60MHz / 48MHz
+- **PLL 探测前复位** — 降频探测前先将 PLL 复位到标准 `sdmin`
+
+---
+
 # 简介
 
 **BouffaloSDK** 是 Bouffalo Lab 提供的 IOT 和 MCU 软件开发包，支持博流智能所有系列芯片，也是 **bl_mcu_sdk** 和 **bl_iot_sdk** 的结合体。
