@@ -834,6 +834,11 @@ static int usbd_vendor_request_handler(uint8_t busid, struct usb_setup_packet *s
                     *len = desclen;
                     return 0;
                 case 0x05:
+                    if (!g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property ||
+                        setup->wValue >= g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property_count ||
+                        !g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property[setup->wValue]) {
+                        return -1;
+                    }
                     desclen = g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property[setup->wValue][0] +
                               (g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property[setup->wValue][1] << 8) +
                               (g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property[setup->wValue][2] << 16) +
