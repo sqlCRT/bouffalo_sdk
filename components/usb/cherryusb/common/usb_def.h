@@ -495,6 +495,10 @@ struct usb_msosv1_descriptor {
     uint8_t vendor_code;
     const uint8_t *compat_id;
     const uint8_t **comp_id_property;
+    /* Number of entries in comp_id_property. A zero value retains
+     * compatibility with legacy aggregate initializers and means one entry
+     * when comp_id_property is non-NULL. New users should set the exact
+     * count so requests for multiple property descriptors are bounded. */
     uint16_t comp_id_property_count;
 };
 

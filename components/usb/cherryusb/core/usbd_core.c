@@ -834,8 +834,19 @@ static int usbd_vendor_request_handler(uint8_t busid, struct usb_setup_packet *s
                     *len = desclen;
                     return 0;
                 case 0x05:
-                    if (!g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property ||
-                        setup->wValue >= g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property_count ||
+                    if (!g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property) {
+                        return -1;
+                    }
+                    /* A trailing zero is what existing aggregate initializers
+                     * produce after comp_id_property_count was added. Preserve
+                     * their single-property behavior while still bounding new
+                     * multi-property descriptors. */
+                    uint16_t property_count =
+                        g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property_count;
+                    if (property_count == 0) {
+                        property_count = 1;
+                    }
+                    if (setup->wValue >= property_count ||
                         !g_usbd_core[busid].descriptors->msosv1_descriptor->comp_id_property[setup->wValue]) {
                         return -1;
                     }
