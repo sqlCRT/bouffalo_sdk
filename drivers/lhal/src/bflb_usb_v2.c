@@ -614,6 +614,28 @@ static uint32_t bflb_usb_vdma_get_remain_size(uint8_t fifo)
     return regval;
 }
 
+/*
+ * A FIFO is bidirectional, but it owns one VDMA channel.  The endpoint state
+ * keeps separate IN and OUT "active" flags, so both can legitimately be set
+ * while an OUT transfer is pre-armed and an IN transfer is subsequently
+ * queued.  The VDMA TYPE bit is the authoritative direction for the completed
+ * transfer: start_write sets it and start_read clears it.
+ */
+static bool bflb_usb_vdma_is_write(uint8_t fifo)
+{
+    uint32_t regaddr;
+
+    if (fifo == USB_FIFO_CXF) {
+        regaddr = BFLB_USB_BASE + USB_VDMA_CXFPS1_OFFSET;
+    } else if (fifo < 4) {
+        regaddr = BFLB_USB_BASE + USB_VDMA_F0PS1_OFFSET + fifo * 8;
+    } else {
+        regaddr = BFLB_USB_BASE + USB_VDMA_FNPS1_OFFSET + (fifo - 4) * 8;
+    }
+
+    return (getreg32(regaddr) & USB_VDMA_TYPE_F0) != 0;
+}
+
 static inline void bflb_usb_control_transfer_done(void)
 {
     uint32_t regval;
@@ -1454,14 +1476,26 @@ void USBD_IRQHandler(uint8_t busid)
             for (uint8_t i = 0; i < USB_MAX_EP_EXCLUDE_EP0; i++) {
                 if (subgroup_intstatus & (1 << (i + 1))) {
                     ep_idx = bflb_usb_get_fifo_ep(i);
-                    if (g_bl_udc.in_ep[ep_idx].ep_active) {
+                    bool vdma_write = bflb_usb_vdma_is_write(i);
+
+                    /* Do not infer VDMA direction from ep_active: on a
+                     * bidirectional endpoint an already-armed OUT transfer
+                     * can coexist with a newer IN transfer. */
+                    if (vdma_write && g_bl_udc.in_ep[ep_idx].ep_active) {
                         g_bl_udc.in_ep[ep_idx].ep_active = 0;
                         g_bl_udc.in_ep[ep_idx].actual_xfer_len = g_bl_udc.in_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
                         usbd_event_ep_in_complete_handler(busid, ep_idx | 0x80, g_bl_udc.in_ep[ep_idx].actual_xfer_len);
-                    } else if (g_bl_udc.out_ep[ep_idx].ep_active) {
+                    } else if (!vdma_write && g_bl_udc.out_ep[ep_idx].ep_active) {
                         g_bl_udc.out_ep[ep_idx].ep_active = 0;
                         g_bl_udc.out_ep[ep_idx].actual_xfer_len = g_bl_udc.out_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
                         usbd_event_ep_out_complete_handler(busid, ep_idx & 0x7f, g_bl_udc.out_ep[ep_idx].actual_xfer_len);
+                    } else {
+                        /* This is intentionally rare and indicates an
+                         * overwritten/aborted bidirectional VDMA request.
+                         * Keep it diagnostic-only; never flood the console
+                         * with normal completion traffic. */
+                        USB_LOG_WRN("VDMA F%u %s completion without matching EP%u active state\r\n",
+                                    i, vdma_write ? "IN" : "OUT", ep_idx);
                     }
                 }
             }
