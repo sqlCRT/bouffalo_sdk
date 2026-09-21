@@ -1489,13 +1489,6 @@ void USBD_IRQHandler(uint8_t busid)
                         g_bl_udc.out_ep[ep_idx].ep_active = 0;
                         g_bl_udc.out_ep[ep_idx].actual_xfer_len = g_bl_udc.out_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
                         usbd_event_ep_out_complete_handler(busid, ep_idx & 0x7f, g_bl_udc.out_ep[ep_idx].actual_xfer_len);
-                    } else {
-                        /* This is intentionally rare and indicates an
-                         * overwritten/aborted bidirectional VDMA request.
-                         * Keep it diagnostic-only; never flood the console
-                         * with normal completion traffic. */
-                        USB_LOG_WRN("VDMA F%u %s completion without matching EP%u active state\r\n",
-                                    i, vdma_write ? "IN" : "OUT", ep_idx);
                     }
                 }
             }
