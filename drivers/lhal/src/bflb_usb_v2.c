@@ -1,4 +1,6 @@
 #include "bflb_core.h"
+#include "bflb_mtimer.h"
+#include "bflb_usb_v2.h"
 #include "usbd_core.h"
 #include "usbh_core.h"
 #include "hardware/usb_v2_reg.h"
@@ -311,9 +313,6 @@ uint8_t usbh_get_port_speed(struct usbh_bus *bus, const uint8_t port)
 #define USB_FIFO_DIR_IN       1
 #define USB_FIFO_DIR_BID      2
 
-#define USB_VDMA_DIR_FIFO2MEM 0
-#define USB_VDMA_DIR_MEM2FIFO 1
-
 #if defined(BL616)
 #define USB_MAX_EP_WITH_EP0     5
 #define USB_MAX_EP_EXCLUDE_EP0  4
@@ -341,6 +340,18 @@ struct bl_udc {
     struct bl_ep_state in_ep[USB_NUM_BIDIR_ENDPOINTS];  /*!< IN endpoint parameters             */
     struct bl_ep_state out_ep[USB_NUM_BIDIR_ENDPOINTS]; /*!< OUT endpoint parameters            */
 } g_bl_udc;
+
+static volatile bool g_usb_force_full_speed;
+
+void bflb_usb_v2_set_force_full_speed(bool force_full_speed)
+{
+#if defined(CONFIG_USB_HS)
+    g_usb_force_full_speed = force_full_speed;
+#else
+    (void)force_full_speed;
+    g_usb_force_full_speed = true;
+#endif
+}
 
 static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t g_setup_buffer[8];
 
@@ -783,11 +794,10 @@ int usb_dc_init(uint8_t busid)
     putreg32(regval, BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
 
     regval = getreg32(BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
-#ifdef CONFIG_USB_HS
-    regval &= ~USB_FORCE_FS;
-#else
-    regval |= USB_FORCE_FS;
-#endif
+    if (g_usb_force_full_speed)
+        regval |= USB_FORCE_FS;
+    else
+        regval &= ~USB_FORCE_FS;
     putreg32(regval, BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
 
     regval = getreg32(BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
@@ -803,11 +813,8 @@ int usb_dc_init(uint8_t busid)
 
     regval = getreg32(BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
     regval &= ~USB_SOFMT_MASK;
-#ifdef CONFIG_USB_HS
-    regval |= USB_SOF_TIMER_MASK_AFTER_RESET_HS;
-#else
-    regval |= USB_SOF_TIMER_MASK_AFTER_RESET_FS;
-#endif
+    regval |= g_usb_force_full_speed ? USB_SOF_TIMER_MASK_AFTER_RESET_FS :
+                                       USB_SOF_TIMER_MASK_AFTER_RESET_HS;
     putreg32(regval, BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
 
     /* enable setup irq in source group0 */
@@ -833,7 +840,7 @@ int usb_dc_init(uint8_t busid)
     regval &= ~USB_MRX0BYTE_INT;
     putreg32(regval, BFLB_USB_BASE + USB_DEV_MISG2_OFFSET);
 
-    /* enable vdma cmplt and error irq in source group3 */
+    /* enable VDMA completion interrupts in source group 3 */
     regval = 0xffffffff;
     regval &= ~(USB_MVDMA_CMPLT_CXF |
 #if (defined(BL618DG) || defined(BL616CL))
@@ -1385,8 +1392,6 @@ void USBD_IRQHandler(uint8_t busid)
                 usbd_event_ep0_setup_complete_handler(busid, g_setup_buffer);
             }
         }
-        if (dev_intstatus & USB_INT_G1) {
-        }
         if (dev_intstatus & USB_INT_G2) {
             subgroup_intstatus = bflb_usb_get_source_group_intstatus(2);
 
@@ -1447,11 +1452,9 @@ void USBD_IRQHandler(uint8_t busid)
 
                 regval = getreg32(BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
                 regval &= ~USB_SOFMT_MASK;
-#ifdef CONFIG_USB_HS
-                regval |= USB_SOF_TIMER_MASK_AFTER_RESET_HS;
-#else
-                regval |= USB_SOF_TIMER_MASK_AFTER_RESET_FS;
-#endif
+                regval |= g_usb_force_full_speed ?
+                          USB_SOF_TIMER_MASK_AFTER_RESET_FS :
+                          USB_SOF_TIMER_MASK_AFTER_RESET_HS;
                 putreg32(regval, BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
 
                 arch_memset(&g_bl_udc, 0, sizeof(g_bl_udc));
@@ -1477,6 +1480,7 @@ void USBD_IRQHandler(uint8_t busid)
                 if (subgroup_intstatus & (1 << (i + 1))) {
                     ep_idx = bflb_usb_get_fifo_ep(i);
                     bool vdma_write = bflb_usb_vdma_is_write(i);
+                    uint32_t remain = bflb_usb_vdma_get_remain_size(i);
 
                     /* Do not infer VDMA direction from ep_active: on a
                      * bidirectional endpoint an already-armed OUT transfer
@@ -1487,7 +1491,7 @@ void USBD_IRQHandler(uint8_t busid)
                         usbd_event_ep_in_complete_handler(busid, ep_idx | 0x80, g_bl_udc.in_ep[ep_idx].actual_xfer_len);
                     } else if (!vdma_write && g_bl_udc.out_ep[ep_idx].ep_active) {
                         g_bl_udc.out_ep[ep_idx].ep_active = 0;
-                        g_bl_udc.out_ep[ep_idx].actual_xfer_len = g_bl_udc.out_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
+                        g_bl_udc.out_ep[ep_idx].actual_xfer_len = g_bl_udc.out_ep[ep_idx].xfer_len - remain;
                         usbd_event_ep_out_complete_handler(busid, ep_idx & 0x7f, g_bl_udc.out_ep[ep_idx].actual_xfer_len);
                     }
                 }
