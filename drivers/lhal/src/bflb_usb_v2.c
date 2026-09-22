@@ -341,7 +341,14 @@ struct bl_udc {
     struct bl_ep_state out_ep[USB_NUM_BIDIR_ENDPOINTS]; /*!< OUT endpoint parameters            */
 } g_bl_udc;
 
+#if defined(CONFIG_USB_HS)
 static volatile bool g_usb_force_full_speed;
+#else
+/* A Full-Speed build must power up with FS timing even when an application
+ * does not call the runtime selector. This keeps the SOF mask and PHY speed
+ * consistent with CONFIG_USB_HS from the first controller reset. */
+static volatile bool g_usb_force_full_speed = true;
+#endif
 
 void bflb_usb_v2_set_force_full_speed(bool force_full_speed)
 {
