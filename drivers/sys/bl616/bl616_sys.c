@@ -1,6 +1,7 @@
 #include "bl_lp.h"
 #include "bl616_glb.h"
 #include "bl616_hbn.h"
+#include "bl616_ef_ctrl.h"
 #include "bl616_psram.h"
 #include "bl_sys.h"
 
@@ -13,6 +14,10 @@
 #define RST_REASON         HBN_SYS_RESET_REASON     // use 4 Bytes
 #define RST_REASON_CHK     HBN_SYS_RESET_REASON_CHK // use 4 Bytes
 #define RST_REASON_CHK_VAL (0xBF1BA55A)
+
+/* boot_efuse_sw_cfg0_t.uartboot_disable in boot2_isp/port/bl616. */
+#define BL_SYS_EFUSE_UARTBOOT_DISABLE (1U << 4)
+#define BL_SYS_EFUSE_USBBOOT_ENABLE   (1U << 5)
 
 static BL_RST_REASON_E s_rst_reason = BL_RST_POWER_OFF;
 
@@ -135,6 +140,52 @@ void bl_sys_reset_system_from_interface(void)
     while (1) {
         /*empty dead loop*/
     }
+}
+
+uint32_t bl_sys_get_sw_usage0(void)
+{
+    uint32_t usage = 0;
+
+    EF_Ctrl_Read_Sw_Usage(0, &usage);
+    return usage;
+}
+
+bool bl_sys_rom_download_is_disabled(void)
+{
+    uint32_t usage = bl_sys_get_sw_usage0();
+
+    return (usage & BL_SYS_EFUSE_UARTBOOT_DISABLE) != 0 &&
+           (usage & BL_SYS_EFUSE_USBBOOT_ENABLE) == 0;
+}
+
+bool bl_sys_usb_download_is_enabled(void)
+{
+    return (bl_sys_get_sw_usage0() & BL_SYS_EFUSE_USBBOOT_ENABLE) != 0;
+}
+
+int bl_sys_disable_rom_download(void)
+{
+    uint32_t usage = bl_sys_get_sw_usage0();
+
+    /* USB boot is controlled by an active-high one-time bit.  Once this bit
+     * has been programmed it cannot be cleared, so uartboot_disable alone
+     * cannot disable the native USB download path. */
+    if ((usage & BL_SYS_EFUSE_USBBOOT_ENABLE) != 0) {
+        return -2;
+    }
+
+    if ((usage & BL_SYS_EFUSE_UARTBOOT_DISABLE) != 0) {
+        return 0;
+    }
+
+    /* eFuse bits are one-way (0 -> 1). Preserve every existing SW_USAGE_0
+     * bit and program only uartboot_disable. */
+    EF_Ctrl_Write_Sw_Usage(0, usage | BL_SYS_EFUSE_UARTBOOT_DISABLE, 1);
+
+    /* Reload the physical row instead of trusting the write shadow, then
+     * verify that the irreversible operation actually completed. */
+    EF_Ctrl_Load_Efuse_R0();
+    return bl_sys_rom_download_is_disabled() ? 0 : -1;
 }
 
 #define SYSMAP_BASE_OFFSET       (12)
