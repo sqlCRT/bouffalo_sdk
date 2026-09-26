@@ -25,7 +25,6 @@
 #include "hci_core.h"
 #include "conn_internal.h"
 #include "l2cap_internal.h"
-#include <l2cap_br_trace.h>
 #include "sdp.h"
 #include "a2dp.h"
 #include "hfp_hf.h"
@@ -75,25 +74,6 @@ enum {
 	/* fixed channels flags */
 	L2CAP_FLAG_FIXED_CONNECTED,		/* fixed connected */
 };
-
-__attribute__((weak)) void bt_l2cap_br_trace(struct bt_conn *conn,
-        enum bt_l2cap_br_trace_event event, uint16_t cid, uint16_t detail,
-        const uint8_t *data, size_t len)
-{
-    (void)conn; (void)event; (void)cid; (void)detail; (void)data; (void)len;
-}
-
-static void l2cap_br_send_sig(struct bt_conn *conn, struct net_buf *buf)
-{
-    uint8_t command[2] = { buf->data[0], buf->data[1] };
-    bt_l2cap_br_trace(conn, BT_BR_TRACE_TX_QUEUE, BT_L2CAP_CID_BR_SIG,
-                      0, buf->data, buf->len);
-    int err = bt_l2cap_send_cb(conn, BT_L2CAP_CID_BR_SIG, buf, NULL, NULL);
-    if (err) {
-        bt_l2cap_br_trace(conn, BT_BR_TRACE_TX_ERROR, BT_L2CAP_CID_BR_SIG,
-                          (uint16_t)err, command, sizeof(command));
-    }
-}
 
 static sys_slist_t br_servers;
 static uint8_t ident;
@@ -210,8 +190,6 @@ static void l2cap_br_rtx_timeout(struct k_work *work)
 	struct bt_l2cap_br_chan *chan = BR_CHAN_RTX(work);
 
 	BT_WARN("chan %p timeout", chan);
-    bt_l2cap_br_trace(chan->chan.conn, BT_BR_TRACE_RTX, chan->rx.cid,
-                      chan->chan.state, NULL, 0);
 
 	if (chan->rx.cid == BT_L2CAP_CID_BR_SIG) {
 		BT_DBG("Skip BR/EDR signalling channel ");
@@ -277,7 +255,7 @@ static void l2cap_br_chan_send_req(struct bt_l2cap_br_chan *chan,
 	 */
 	k_delayed_work_submit(&chan->chan.rtx_work, timeout);
 
-	l2cap_br_send_sig(chan->chan.conn, buf);
+	bt_l2cap_send(chan->chan.conn, BT_L2CAP_CID_BR_SIG, buf);
 }
 
 static void l2cap_br_get_info(struct bt_l2cap_br *l2cap, uint16_t info_type)
@@ -386,11 +364,6 @@ static int l2cap_br_info_rsp(struct bt_l2cap_br *l2cap, uint8_t ident,
 
 	switch (type) {
 	case BT_L2CAP_INFO_FEAT_MASK:
-        if (buf->len < sizeof(uint32_t)) {
-            BT_ERR("Truncated L2CAP feature mask");
-            err = -EINVAL;
-            goto done;
-        }
 		l2cap->info_feat_mask = net_buf_pull_le32(buf);
 		BT_DBG("remote info mask 0x%08x", l2cap->info_feat_mask);
 
@@ -401,11 +374,6 @@ static int l2cap_br_info_rsp(struct bt_l2cap_br *l2cap, uint8_t ident,
 		l2cap_br_get_info(l2cap, BT_L2CAP_INFO_FIXED_CHAN);
 		return 0;
 	case BT_L2CAP_INFO_FIXED_CHAN:
-        if (buf->len < 8) {
-            BT_ERR("Truncated L2CAP fixed channel mask");
-            err = -EINVAL;
-            goto done;
-        }
 		l2cap->info_fixed_chan = net_buf_pull_u8(buf);
 		BT_DBG("remote fixed channel mask 0x%02x",
 		       l2cap->info_fixed_chan);
@@ -490,14 +458,13 @@ static int l2cap_br_info_req(struct bt_l2cap_br *l2cap, uint8_t ident,
 		break;
 	}
 
-	l2cap_br_send_sig(conn, rsp_buf);
+	bt_l2cap_send(conn, BT_L2CAP_CID_BR_SIG, rsp_buf);
 
 	return 0;
 }
 
 void bt_l2cap_br_connected(struct bt_conn *conn)
 {
-    bt_l2cap_br_trace(conn, BT_BR_TRACE_OPEN, 0, 0, NULL, 0);
 	struct bt_l2cap_chan *chan;
 
 	#if defined(BFLB_BR_DISABLE_STATIC_CHANNEL)
@@ -706,7 +673,7 @@ static void l2cap_br_send_conn_rsp(struct bt_conn *conn, uint16_t scid,
 		rsp->status = sys_cpu_to_le16(BT_L2CAP_CS_NO_INFO);
 	}
 
-	l2cap_br_send_sig(conn, buf);
+	bt_l2cap_send(conn, BT_L2CAP_CID_BR_SIG, buf);
 }
 
 static int l2cap_br_conn_req_reply(struct bt_l2cap_chan *chan, uint16_t result)
@@ -718,10 +685,7 @@ static int l2cap_br_conn_req_reply(struct bt_l2cap_chan *chan, uint16_t result)
 
 	l2cap_br_send_conn_rsp(chan->conn, BR_CHAN(chan)->tx.cid,
 			       BR_CHAN(chan)->rx.cid, chan->ident, result);
-	/* Pending and final responses belong to the same transaction. */
-    if (result != BT_L2CAP_BR_PENDING) {
-        chan->ident = 0U;
-    }
+	chan->ident = 0U;
 
 	return 0;
 }
@@ -956,7 +920,7 @@ static void l2cap_br_send_reject(struct bt_conn *conn, uint8_t ident,
 		net_buf_add_mem(buf, data, data_len);
 	}
 
-	l2cap_br_send_sig(conn, buf);
+	bt_l2cap_send(conn, BT_L2CAP_CID_BR_SIG, buf);
 }
 
 static uint16_t l2cap_br_conf_opt_mtu(struct bt_l2cap_chan *chan,
@@ -1094,7 +1058,7 @@ send_rsp:
     }
 	hdr->len = sys_cpu_to_le16(buf->len - sizeof(*hdr));
 
-	l2cap_br_send_sig(conn, buf);
+	bt_l2cap_send(conn, BT_L2CAP_CID_BR_SIG, buf);
 
 	if (result != BT_L2CAP_CONF_SUCCESS) {
 		return;
@@ -1180,7 +1144,7 @@ static void l2cap_br_disconn_req(struct bt_l2cap_br *l2cap, uint8_t ident,
 
 	bt_l2cap_chan_del(&chan->chan);
 
-	l2cap_br_send_sig(conn, buf);
+	bt_l2cap_send(conn, BT_L2CAP_CID_BR_SIG, buf);
 }
 
 static void l2cap_br_connected(struct bt_l2cap_chan *chan)
@@ -1250,7 +1214,7 @@ static int l2cap_br_echo_req(struct bt_l2cap_br *l2cap, uint8_t ident,
 	hdr_info->code = BT_L2CAP_ECHO_RSP;
 	hdr_info->ident = ident;
 
-	l2cap_br_send_sig(conn, rsp_buf);
+	bt_l2cap_send(conn, BT_L2CAP_CID_BR_SIG, rsp_buf);
 	return 0;
 }
 
@@ -1447,61 +1411,81 @@ int bt_l2cap_br_chan_send_cb(struct bt_l2cap_chan *chan, struct net_buf *buf,
 
 static int l2cap_br_recv(struct bt_l2cap_chan *chan, struct net_buf *buf)
 {
-    struct bt_l2cap_br *l2cap = CONTAINER_OF(chan, struct bt_l2cap_br, chan);
-    bt_l2cap_br_trace(chan->conn, BT_BR_TRACE_RX, BT_L2CAP_CID_BR_SIG,
-                      0, buf->data, buf->len);
+	struct bt_l2cap_br *l2cap = CONTAINER_OF(chan, struct bt_l2cap_br, chan);
+	struct bt_l2cap_sig_hdr *hdr;
+	uint16_t len;
 
-    while (buf->len >= sizeof(struct bt_l2cap_sig_hdr)) {
-        struct bt_l2cap_sig_hdr *hdr = net_buf_pull_mem(buf, sizeof(*hdr));
-        uint16_t len = sys_le16_to_cpu(hdr->len);
-        if (len > buf->len) {
-            BT_ERR("L2CAP length mismatch (%u != %u)", buf->len, len);
-            return 0;
-        }
-        if (!hdr->ident) {
-            BT_ERR("Invalid ident value in L2CAP PDU");
-            return 0;
-        }
+	if (buf->len < sizeof(*hdr)) {
+		BT_ERR("Too small L2CAP signaling PDU");
+		return 0;
+	}
 
-        /* Handlers have different consumption rules. Isolate this command,
-         * then restore the next boundary instead of pulling len twice. */
-        uint8_t *next = buf->data + len;
-        uint16_t remaining = buf->len - len;
-        buf->len = len;
-        switch (hdr->code) {
-        case BT_L2CAP_INFO_RSP:
-            l2cap_br_info_rsp(l2cap, hdr->ident, buf); break;
-        case BT_L2CAP_INFO_REQ:
-            l2cap_br_info_req(l2cap, hdr->ident, buf); break;
-        case BT_L2CAP_DISCONN_REQ:
-            l2cap_br_disconn_req(l2cap, hdr->ident, buf); break;
-        case BT_L2CAP_CONN_REQ:
-            l2cap_br_conn_req(l2cap, hdr->ident, buf); break;
-        case BT_L2CAP_CONF_RSP:
-            l2cap_br_conf_rsp(l2cap, hdr->ident, len, buf); break;
-        case BT_L2CAP_CONF_REQ:
-            l2cap_br_conf_req(l2cap, hdr->ident, len, buf); break;
-        case BT_L2CAP_DISCONN_RSP:
-            l2cap_br_disconn_rsp(l2cap, hdr->ident, buf); break;
-        case BT_L2CAP_CONN_RSP:
-            l2cap_br_conn_rsp(l2cap, hdr->ident, buf); break;
-        case BT_L2CAP_ECHO_REQ:
-            l2cap_br_echo_req(l2cap, hdr->ident, buf); break;
+    uint16_t remain_len = buf->len;
+
+    //take multi-command in a l2cap packet into consideration.
+    while(remain_len >= sizeof(*hdr))
+    {
+    	hdr = net_buf_pull_mem(buf, sizeof(*hdr));
+    	len = sys_le16_to_cpu(hdr->len);
+    
+    	BT_DBG("Signaling code 0x%02x ident %u len %u", hdr->code,
+    	       hdr->ident, len);
+    
+    	if (buf->len < len) {
+    		BT_ERR("L2CAP length mismatch (%u != %u)", buf->len, len);
+    		return 0;
+    	}
+    
+    	if (!hdr->ident) {
+    		BT_ERR("Invalid ident value in L2CAP PDU");
+    		return 0;
+    	}
+        
+    	switch (hdr->code) {
+    	case BT_L2CAP_INFO_RSP:
+    		l2cap_br_info_rsp(l2cap, hdr->ident, buf);
+    		break;
+    	case BT_L2CAP_INFO_REQ:
+    		l2cap_br_info_req(l2cap, hdr->ident, buf);
+    		break;
+    	case BT_L2CAP_DISCONN_REQ:
+    		l2cap_br_disconn_req(l2cap, hdr->ident, buf);
+    		break;
+    	case BT_L2CAP_CONN_REQ:
+    		l2cap_br_conn_req(l2cap, hdr->ident, buf);
+    		break;
+    	case BT_L2CAP_CONF_RSP:
+    		l2cap_br_conf_rsp(l2cap, hdr->ident, len, buf);
+    		break;
+    	case BT_L2CAP_CONF_REQ:
+    		l2cap_br_conf_req(l2cap, hdr->ident, len, buf);
+    		break;
+    	case BT_L2CAP_DISCONN_RSP:
+    		l2cap_br_disconn_rsp(l2cap, hdr->ident, buf);
+    		break;
+    	case BT_L2CAP_CONN_RSP:
+    		l2cap_br_conn_rsp(l2cap, hdr->ident, buf);
+    		break;
+    	case BT_L2CAP_ECHO_REQ:
+    		l2cap_br_echo_req(l2cap, hdr->ident, buf);
+    		break;
         case BT_L2CAP_ECHO_RSP:
-            l2cap_br_echo_resp(l2cap, hdr->ident, buf); break;
-        default:
-            BT_WARN("Unknown/Unsupported L2CAP PDU code 0x%02x", hdr->code);
-            l2cap_br_send_reject(chan->conn, hdr->ident,
-                                BT_L2CAP_REJ_NOT_UNDERSTOOD, NULL, 0);
+            l2cap_br_echo_resp(l2cap, hdr->ident, buf);
             break;
-        }
-        buf->data = next;
-        buf->len = remaining;
+    	default:
+    		BT_WARN("Unknown/Unsupported L2CAP PDU code 0x%02x", hdr->code);
+    		l2cap_br_send_reject(chan->conn, hdr->ident,
+    				     BT_L2CAP_REJ_NOT_UNDERSTOOD, NULL, 0);
+    		break;
+    	}
+
+        remain_len -= sizeof(*hdr) + len;
+        if(remain_len >= sizeof(*hdr))
+            net_buf_pull_mem(buf, len);
+        else if(remain_len)
+            l2cap_br_send_reject(chan->conn, hdr->ident, BT_L2CAP_REJ_NOT_UNDERSTOOD, NULL, 0);
     }
-    if (buf->len) {
-        BT_ERR("Truncated L2CAP signaling header (%u bytes)", buf->len);
-    }
-    return 0;
+	return 0;
 }
 
 static void l2cap_br_conn_pend(struct bt_l2cap_chan *chan, uint8_t status)
@@ -1744,6 +1728,6 @@ int bt_l2cap_br_echo_req(struct bt_conn *conn)
 	hdr_info->code = BT_L2CAP_ECHO_REQ;
 	hdr_info->ident = ident;
 
-	l2cap_br_send_sig(conn, rsp_buf);
+	bt_l2cap_send(conn, BT_L2CAP_CID_BR_SIG, rsp_buf);
 	return 0; 
 }
