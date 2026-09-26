@@ -28,6 +28,7 @@
 #include "hci_core.h"
 #include "conn_internal.h"
 #include "l2cap_internal.h"
+#include <l2cap_br_trace.h>
 
 #include "port/include/config.h"
 
@@ -397,6 +398,11 @@ void bt_l2cap_disconnected(struct bt_conn *conn)
 	SYS_SLIST_FOR_EACH_CONTAINER_SAFE(&conn->channels, chan, next, node) {
 		bt_l2cap_chan_del(chan);
 	}
+#if defined(CONFIG_BT_BREDR)
+    if (conn->type == BT_CONN_TYPE_BR) {
+        bt_l2cap_br_trace(conn, BT_BR_TRACE_CLEANED, 0, 0, NULL, 0);
+    }
+#endif
 }
 
 static struct net_buf *l2cap_create_le_sig_pdu(struct net_buf *buf,
