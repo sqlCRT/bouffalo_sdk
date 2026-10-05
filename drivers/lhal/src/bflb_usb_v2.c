@@ -1194,7 +1194,11 @@ int usbd_ep_open(uint8_t busid, const struct usb_endpoint_descriptor *ep)
 
             bflb_usb_set_fifo_epmap(USB_FIFO_F0, 1, USB_FIFO_DIR_BID);
             bflb_usb_set_fifo_epmap(USB_FIFO_F1, 2, USB_FIFO_DIR_BID);
-            bflb_usb_set_fifo_epmap(USB_FIFO_F2, 3, USB_FIFO_DIR_BID);
+            /* Preserve the paired FIFO direction throughout endpoint opening.
+             * A temporary BID mapping could accept HID OUT into unread IN data
+             * before shared3_restore() runs at the end of this function. */
+            if (!shared3_paired())
+                bflb_usb_set_fifo_epmap(USB_FIFO_F2, 3, USB_FIFO_DIR_BID);
             bflb_usb_set_fifo_epmap(USB_FIFO_F3, 4, USB_FIFO_DIR_BID);
 #if defined(BL618DG) || defined(BL616CL)
             bflb_usb_set_fifo_epmap(USB_FIFO_F4, 5, USB_FIFO_DIR_BID);
