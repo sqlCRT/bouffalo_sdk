@@ -8,6 +8,11 @@
  * active, without requiring a second firmware image. */
 void bflb_usb_v2_set_force_full_speed(bool force_full_speed);
 
+/* Set before usb_dc_init(). Keep the PHY unplugged throughout initialization
+ * so the application can publish its descriptors before attaching. Default
+ * false preserves automatic attachment for other SDK applications. */
+void bflb_usb_v2_set_start_detached(bool detached);
+
 /* Opt-in arbitration for audio interrupt IN 0x83 and native HID OUT 0x03.
  * Configure while the USB device is stopped, before interface registration.
  * Other modes leave this disabled. Poll from task context with USB IRQ excluded. */
