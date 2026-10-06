@@ -360,6 +360,13 @@ void bflb_usb_v2_set_force_full_speed(bool force_full_speed)
 #endif
 }
 
+static bool g_usb_start_detached;
+
+void bflb_usb_v2_set_start_detached(bool detached)
+{
+    g_usb_start_detached = detached;
+}
+
 static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t g_setup_buffer[8];
 
 #ifdef CONFIG_USBDEV_TEST_MODE
@@ -1000,7 +1007,10 @@ int usb_dc_init(uint8_t busid)
     putreg32(regval, BFLB_USB_BASE + USB_VDMA_CTRL_OFFSET);
 
     regval = getreg32(BFLB_USB_BASE + USB_PHY_TST_OFFSET);
-    regval &= ~USB_UNPLUG;
+    if (g_usb_start_detached)
+        regval |= USB_UNPLUG;
+    else
+        regval &= ~USB_UNPLUG;
     putreg32(regval, BFLB_USB_BASE + USB_PHY_TST_OFFSET);
 
     /* enable USB_HC_CONN_DET_EN and USB_HC_WKP_DET_EN */
