@@ -28,6 +28,7 @@
 #include "hci_core.h"
 #include "conn_internal.h"
 #include "l2cap_internal.h"
+#include <l2cap_br_lifecycle.h>
 
 #include "port/include/config.h"
 
@@ -390,6 +391,13 @@ void bt_l2cap_connected(struct bt_conn *conn)
 	}
 }
 
+#if defined(CONFIG_BT_BREDR)
+__attribute__((weak)) void bt_l2cap_br_cleanup_complete(struct bt_conn *conn)
+{
+    (void)conn;
+}
+#endif
+
 void bt_l2cap_disconnected(struct bt_conn *conn)
 {
 	struct bt_l2cap_chan *chan, *next;
@@ -397,6 +405,11 @@ void bt_l2cap_disconnected(struct bt_conn *conn)
 	SYS_SLIST_FOR_EACH_CONTAINER_SAFE(&conn->channels, chan, next, node) {
 		bt_l2cap_chan_del(chan);
 	}
+#if defined(CONFIG_BT_BREDR)
+    if (conn->type == BT_CONN_TYPE_BR) {
+        bt_l2cap_br_cleanup_complete(conn);
+    }
+#endif
 }
 
 static struct net_buf *l2cap_create_le_sig_pdu(struct net_buf *buf,

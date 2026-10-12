@@ -431,7 +431,11 @@ static int hci_driver_send(struct net_buf *buf)
 	#else
 	err = bl_onchiphci_send_2_controller(buf);
 	#endif
-	net_buf_unref(buf);
+	/* Driver consumes only on success. On failure ACL and command callers
+	 * retain ownership and perform their own rollback/unref. */
+	if (!err) {
+		net_buf_unref(buf);
+	}
 #else
 	type = bt_buf_get_type(buf);
 	switch (type) {

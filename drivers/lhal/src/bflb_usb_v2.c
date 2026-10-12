@@ -1,4 +1,6 @@
 #include "bflb_core.h"
+#include "bflb_mtimer.h"
+#include "bflb_usb_v2.h"
 #include "usbd_core.h"
 #include "usbh_core.h"
 #include "hardware/usb_v2_reg.h"
@@ -311,9 +313,6 @@ uint8_t usbh_get_port_speed(struct usbh_bus *bus, const uint8_t port)
 #define USB_FIFO_DIR_IN       1
 #define USB_FIFO_DIR_BID      2
 
-#define USB_VDMA_DIR_FIFO2MEM 0
-#define USB_VDMA_DIR_MEM2FIFO 1
-
 #if defined(BL616)
 #define USB_MAX_EP_WITH_EP0     5
 #define USB_MAX_EP_EXCLUDE_EP0  4
@@ -341,6 +340,32 @@ struct bl_udc {
     struct bl_ep_state in_ep[USB_NUM_BIDIR_ENDPOINTS];  /*!< IN endpoint parameters             */
     struct bl_ep_state out_ep[USB_NUM_BIDIR_ENDPOINTS]; /*!< OUT endpoint parameters            */
 } g_bl_udc;
+
+#if defined(CONFIG_USB_HS)
+static volatile bool g_usb_force_full_speed;
+#else
+/* A Full-Speed build must power up with FS timing even when an application
+ * does not call the runtime selector. This keeps the SOF mask and PHY speed
+ * consistent with CONFIG_USB_HS from the first controller reset. */
+static volatile bool g_usb_force_full_speed = true;
+#endif
+
+void bflb_usb_v2_set_force_full_speed(bool force_full_speed)
+{
+#if defined(CONFIG_USB_HS)
+    g_usb_force_full_speed = force_full_speed;
+#else
+    (void)force_full_speed;
+    g_usb_force_full_speed = true;
+#endif
+}
+
+static bool g_usb_start_detached;
+
+void bflb_usb_v2_set_start_detached(bool detached)
+{
+    g_usb_start_detached = detached;
+}
 
 static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t g_setup_buffer[8];
 
@@ -614,6 +639,28 @@ static uint32_t bflb_usb_vdma_get_remain_size(uint8_t fifo)
     return regval;
 }
 
+/*
+ * A FIFO is bidirectional, but it owns one VDMA channel.  The endpoint state
+ * keeps separate IN and OUT "active" flags, so both can legitimately be set
+ * while an OUT transfer is pre-armed and an IN transfer is subsequently
+ * queued.  The VDMA TYPE bit is the authoritative direction for the completed
+ * transfer: start_write sets it and start_read clears it.
+ */
+static bool bflb_usb_vdma_is_write(uint8_t fifo)
+{
+    uint32_t regaddr;
+
+    if (fifo == USB_FIFO_CXF) {
+        regaddr = BFLB_USB_BASE + USB_VDMA_CXFPS1_OFFSET;
+    } else if (fifo < 4) {
+        regaddr = BFLB_USB_BASE + USB_VDMA_F0PS1_OFFSET + fifo * 8;
+    } else {
+        regaddr = BFLB_USB_BASE + USB_VDMA_FNPS1_OFFSET + (fifo - 4) * 8;
+    }
+
+    return (getreg32(regaddr) & USB_VDMA_TYPE_F0) != 0;
+}
+
 static inline void bflb_usb_control_transfer_done(void)
 {
     uint32_t regval;
@@ -730,6 +777,109 @@ static uint8_t usb_get_transfer_fifo(uint8_t ep_idx)
     return target_fifo_id;
 }
 
+/* Optional EP3 interrupt arbitration for UAC status IN + native HID OUT.
+ * FIFO F2 owns one VDMA engine: never overwrite a pre-armed OUT DMA with IN.
+ * OUT is armed in software and starts DMA only when a packet is available.
+ * IN completion is reported after the host drains FIFO, not after DMA fills it.
+ * Other endpoint pairs and modes retain the original backend behavior. */
+enum shared3_phase { SHARED3_IDLE, SHARED3_OUT_DMA, SHARED3_IN_DMA, SHARED3_IN_HOST };
+static bool shared3_enabled;
+static volatile enum shared3_phase shared3_phase;
+static uint64_t shared3_submit_us;
+
+void bflb_usb_v2_set_ep3_arbitration(bool enabled)
+{
+    shared3_enabled = enabled;
+    shared3_phase = SHARED3_IDLE;
+}
+
+static bool shared3_paired(void)
+{
+    return shared3_enabled && g_bl_udc.in_ep[3].ep_enable &&
+           g_bl_udc.out_ep[3].ep_enable &&
+           g_bl_udc.in_ep[3].ep_type == 3 && g_bl_udc.out_ep[3].ep_type == 3;
+}
+
+static void shared3_restore(void)
+{
+    if (!shared3_paired()) return;
+    bool in = shared3_phase == SHARED3_IN_DMA || shared3_phase == SHARED3_IN_HOST;
+    bflb_usb_set_fifo_epmap(USB_FIFO_F2, 3, in ? USB_FIFO_DIR_IN : USB_FIFO_DIR_OUT);
+    uint32_t mask = getreg32(BFLB_USB_BASE + USB_DEV_MISG1_OFFSET);
+    mask |= USB_MF2_OUT_INT | USB_MF2_SPK_INT | USB_MF2_IN_INT;
+    if (shared3_phase == SHARED3_IDLE && g_bl_udc.out_ep[3].ep_active)
+        mask &= ~(USB_MF2_OUT_INT | USB_MF2_SPK_INT);
+    if (shared3_phase == SHARED3_IN_HOST) mask &= ~USB_MF2_IN_INT;
+    putreg32(mask, BFLB_USB_BASE + USB_DEV_MISG1_OFFSET);
+}
+
+static void shared3_kick(void)
+{
+    if (!shared3_paired() || shared3_phase != SHARED3_IDLE) return;
+    shared3_restore();
+    uint32_t bytes = getreg32(BFLB_USB_BASE + USB_DEV_FIBC2_OFFSET) & USB_BC_F0_MASK;
+    if (bytes && g_bl_udc.out_ep[3].ep_active) {
+        shared3_phase = SHARED3_OUT_DMA;
+        shared3_restore();
+        bflb_usb_vdma_start_read(USB_FIFO_F2, g_bl_udc.out_ep[3].xfer_buf,
+                                g_bl_udc.out_ep[3].xfer_len);
+        return;
+    }
+    if (!g_bl_udc.in_ep[3].ep_active || bytes ||
+        (bflb_usb_get_rx_zlp_intstatus() & (1u << 2))) return;
+
+    /* Stop accepting OUT before the final empty check. An already accepted
+     * packet is serviced first; new OUT tokens retry while IN owns the FIFO. */
+    shared3_phase = SHARED3_IN_DMA;
+    shared3_restore();
+    bytes = getreg32(BFLB_USB_BASE + USB_DEV_FIBC2_OFFSET) & USB_BC_F0_MASK;
+    if (bytes) {
+        shared3_phase = SHARED3_IDLE;
+        shared3_restore();
+        return;
+    }
+    shared3_submit_us = bflb_mtimer_get_time_us();
+    bflb_usb_vdma_start_write(USB_FIFO_F2, g_bl_udc.in_ep[3].xfer_buf,
+                             g_bl_udc.in_ep[3].xfer_len);
+}
+
+static void shared3_reset(void)
+{
+    if (!shared3_enabled) return;
+    shared3_phase = SHARED3_IDLE;
+    g_bl_udc.in_ep[3].ep_active = false;
+    g_bl_udc.out_ep[3].ep_active = false;
+    uint32_t mask = getreg32(BFLB_USB_BASE + USB_DEV_MISG1_OFFSET);
+    putreg32(mask | USB_MF2_OUT_INT | USB_MF2_SPK_INT | USB_MF2_IN_INT,
+             BFLB_USB_BASE + USB_DEV_MISG1_OFFSET);
+}
+
+void bflb_usb_v2_poll_ep3_arbitration(uint8_t busid)
+{
+    if (!shared3_paired()) return;
+    if (shared3_phase == SHARED3_IN_HOST &&
+        (getreg32(BFLB_USB_BASE + USB_DEV_CXCFE_OFFSET) & USB_F2_EMP)) {
+        uint32_t sent = g_bl_udc.in_ep[3].xfer_len;
+        shared3_phase = SHARED3_IDLE;
+        g_bl_udc.in_ep[3].ep_active = false;
+        shared3_restore();
+        usbd_event_ep_in_complete_handler(busid, 0x83, sent);
+    }
+    /* A host that does not poll the optional UAC endpoint must not block
+     * rumble indefinitely. Drop the unread status after 25ms, then resume OUT.
+     * Never abort an OUT transfer to make room for a notification. */
+    if (shared3_phase == SHARED3_IN_HOST &&
+        bflb_mtimer_get_time_us() - shared3_submit_us >= 25000ULL) {
+        /* Keep OUT blocked until the unread IN packet has been discarded. */
+        bflb_usb_reset_fifo(USB_FIFO_F2);
+        shared3_phase = SHARED3_IDLE;
+        g_bl_udc.in_ep[3].ep_active = false;
+        shared3_restore();
+        usbd_event_ep_in_complete_handler(busid, 0x83, 0);
+    }
+    shared3_kick();
+}
+
 int usb_dc_init(uint8_t busid)
 {
     uint32_t regval;
@@ -761,11 +911,10 @@ int usb_dc_init(uint8_t busid)
     putreg32(regval, BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
 
     regval = getreg32(BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
-#ifdef CONFIG_USB_HS
-    regval &= ~USB_FORCE_FS;
-#else
-    regval |= USB_FORCE_FS;
-#endif
+    if (g_usb_force_full_speed)
+        regval |= USB_FORCE_FS;
+    else
+        regval &= ~USB_FORCE_FS;
     putreg32(regval, BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
 
     regval = getreg32(BFLB_USB_BASE + USB_DEV_CTL_OFFSET);
@@ -781,11 +930,8 @@ int usb_dc_init(uint8_t busid)
 
     regval = getreg32(BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
     regval &= ~USB_SOFMT_MASK;
-#ifdef CONFIG_USB_HS
-    regval |= USB_SOF_TIMER_MASK_AFTER_RESET_HS;
-#else
-    regval |= USB_SOF_TIMER_MASK_AFTER_RESET_FS;
-#endif
+    regval |= g_usb_force_full_speed ? USB_SOF_TIMER_MASK_AFTER_RESET_FS :
+                                       USB_SOF_TIMER_MASK_AFTER_RESET_HS;
     putreg32(regval, BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
 
     /* enable setup irq in source group0 */
@@ -811,7 +957,7 @@ int usb_dc_init(uint8_t busid)
     regval &= ~USB_MRX0BYTE_INT;
     putreg32(regval, BFLB_USB_BASE + USB_DEV_MISG2_OFFSET);
 
-    /* enable vdma cmplt and error irq in source group3 */
+    /* enable VDMA completion interrupts in source group 3 */
     regval = 0xffffffff;
     regval &= ~(USB_MVDMA_CMPLT_CXF |
 #if (defined(BL618DG) || defined(BL616CL))
@@ -861,7 +1007,10 @@ int usb_dc_init(uint8_t busid)
     putreg32(regval, BFLB_USB_BASE + USB_VDMA_CTRL_OFFSET);
 
     regval = getreg32(BFLB_USB_BASE + USB_PHY_TST_OFFSET);
-    regval &= ~USB_UNPLUG;
+    if (g_usb_start_detached)
+        regval |= USB_UNPLUG;
+    else
+        regval &= ~USB_UNPLUG;
     putreg32(regval, BFLB_USB_BASE + USB_PHY_TST_OFFSET);
 
     /* enable USB_HC_CONN_DET_EN and USB_HC_WKP_DET_EN */
@@ -1055,7 +1204,11 @@ int usbd_ep_open(uint8_t busid, const struct usb_endpoint_descriptor *ep)
 
             bflb_usb_set_fifo_epmap(USB_FIFO_F0, 1, USB_FIFO_DIR_BID);
             bflb_usb_set_fifo_epmap(USB_FIFO_F1, 2, USB_FIFO_DIR_BID);
-            bflb_usb_set_fifo_epmap(USB_FIFO_F2, 3, USB_FIFO_DIR_BID);
+            /* Preserve the paired FIFO direction throughout endpoint opening.
+             * A temporary BID mapping could accept HID OUT into unread IN data
+             * before shared3_restore() runs at the end of this function. */
+            if (!shared3_paired())
+                bflb_usb_set_fifo_epmap(USB_FIFO_F2, 3, USB_FIFO_DIR_BID);
             bflb_usb_set_fifo_epmap(USB_FIFO_F3, 4, USB_FIFO_DIR_BID);
 #if defined(BL618DG) || defined(BL616CL)
             bflb_usb_set_fifo_epmap(USB_FIFO_F4, 5, USB_FIFO_DIR_BID);
@@ -1180,6 +1333,8 @@ int usbd_ep_open(uint8_t busid, const struct usb_endpoint_descriptor *ep)
         regval |= USB_AFT_CONF;
         putreg32(regval, BFLB_USB_BASE + USB_DEV_ADR_OFFSET);
     }
+    /* Opening a streaming endpoint remaps all FIFOs in this backend. */
+    shared3_restore();
     return 0;
 }
 
@@ -1279,6 +1434,17 @@ int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, ui
         return -2;
     }
 
+    if (ep_idx == 3 && shared3_paired()) {
+        if (!data_len || data_len > g_bl_udc.in_ep[3].ep_mps) return -1;
+        if (g_bl_udc.in_ep[3].ep_active) return -3;
+        g_bl_udc.in_ep[3].xfer_buf = (uint8_t *)data;
+        g_bl_udc.in_ep[3].xfer_len = data_len;
+        g_bl_udc.in_ep[3].actual_xfer_len = 0;
+        g_bl_udc.in_ep[3].ep_active = true;
+        shared3_kick();
+        return 0;
+    }
+
     g_bl_udc.in_ep[ep_idx].xfer_buf = (uint8_t *)data;
     g_bl_udc.in_ep[ep_idx].xfer_len = data_len;
     g_bl_udc.in_ep[ep_idx].actual_xfer_len = 0;
@@ -1317,6 +1483,16 @@ int usbd_ep_start_read(uint8_t busid, const uint8_t ep, uint8_t *data, uint32_t 
         return -2;
     }
 
+    if (ep_idx == 3 && shared3_paired()) {
+        if (!data_len || g_bl_udc.out_ep[3].ep_active) return -3;
+        g_bl_udc.out_ep[3].xfer_buf = data;
+        g_bl_udc.out_ep[3].xfer_len = data_len;
+        g_bl_udc.out_ep[3].actual_xfer_len = 0;
+        g_bl_udc.out_ep[3].ep_active = true;
+        shared3_kick();
+        return 0;
+    }
+
     if (data_len == 0) {
         bflb_usb_control_transfer_done();
         usbd_event_ep_out_complete_handler(busid, 0x00, 0);
@@ -1350,6 +1526,26 @@ void USBD_IRQHandler(uint8_t busid)
 
     if (glb_intstatus & USB_DEV_INT) {
         dev_intstatus = getreg32(BFLB_USB_BASE + USB_DEV_IGR_OFFSET);
+        if ((dev_intstatus & USB_INT_G1) && shared3_paired()) {
+            subgroup_intstatus = bflb_usb_get_source_group_intstatus(1);
+            if (shared3_phase == SHARED3_IN_HOST &&
+                (subgroup_intstatus & USB_F2_IN_INT) &&
+                (getreg32(BFLB_USB_BASE + USB_DEV_CXCFE_OFFSET) & USB_F2_EMP)) {
+                uint32_t sent = g_bl_udc.in_ep[3].xfer_len;
+                shared3_phase = SHARED3_IDLE;
+                g_bl_udc.in_ep[3].ep_active = false;
+                shared3_restore();
+                usbd_event_ep_in_complete_handler(busid, 0x83, sent);
+            }
+            /* Some controller revisions assert IN-ready before drain. Poll
+             * the explicit empty bit instead of spinning on that level IRQ. */
+            if (shared3_phase == SHARED3_IN_HOST &&
+                (subgroup_intstatus & USB_F2_IN_INT)) {
+                regval = getreg32(BFLB_USB_BASE + USB_DEV_MISG1_OFFSET);
+                putreg32(regval | USB_MF2_IN_INT, BFLB_USB_BASE + USB_DEV_MISG1_OFFSET);
+            }
+            shared3_kick();
+        }
         if (dev_intstatus & USB_INT_G0) {
             subgroup_intstatus = bflb_usb_get_source_group_intstatus(0);
 
@@ -1363,13 +1559,12 @@ void USBD_IRQHandler(uint8_t busid)
                 usbd_event_ep0_setup_complete_handler(busid, g_setup_buffer);
             }
         }
-        if (dev_intstatus & USB_INT_G1) {
-        }
         if (dev_intstatus & USB_INT_G2) {
             subgroup_intstatus = bflb_usb_get_source_group_intstatus(2);
 
             if (subgroup_intstatus & USB_SUSP_INT) {
                 bflb_usb_source_group_int_clear(2, USB_SUSP_INT);
+                shared3_reset();
 
                 bflb_usb_reset_fifo(USB_FIFO_F0);
                 bflb_usb_reset_fifo(USB_FIFO_F1);
@@ -1402,6 +1597,8 @@ void USBD_IRQHandler(uint8_t busid)
                 for (uint8_t i = 1; i < USB_MAX_EP_WITH_EP0; i++) {
                     if (bflb_usb_get_rx_zlp_intstatus() & (1 << (i - 1))) {
                         bflb_usb_clear_rx_zlp_intstatus(i);
+                        if (i == 3 && shared3_paired())
+                            g_bl_udc.out_ep[3].ep_active = false;
                         usbd_event_ep_out_complete_handler(busid, i, 0);
                     }
                 }
@@ -1410,6 +1607,7 @@ void USBD_IRQHandler(uint8_t busid)
             }
             if (subgroup_intstatus & USBRST_INT) {
                 bflb_usb_source_group_int_clear(2, USBRST_INT);
+                shared3_reset();
 
                 bflb_usb_reset_fifo(USB_FIFO_F0);
                 bflb_usb_reset_fifo(USB_FIFO_F1);
@@ -1425,11 +1623,9 @@ void USBD_IRQHandler(uint8_t busid)
 
                 regval = getreg32(BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
                 regval &= ~USB_SOFMT_MASK;
-#ifdef CONFIG_USB_HS
-                regval |= USB_SOF_TIMER_MASK_AFTER_RESET_HS;
-#else
-                regval |= USB_SOF_TIMER_MASK_AFTER_RESET_FS;
-#endif
+                regval |= g_usb_force_full_speed ?
+                          USB_SOF_TIMER_MASK_AFTER_RESET_FS :
+                          USB_SOF_TIMER_MASK_AFTER_RESET_HS;
                 putreg32(regval, BFLB_USB_BASE + USB_DEV_SMT_OFFSET);
 
                 arch_memset(&g_bl_udc, 0, sizeof(g_bl_udc));
@@ -1454,13 +1650,34 @@ void USBD_IRQHandler(uint8_t busid)
             for (uint8_t i = 0; i < USB_MAX_EP_EXCLUDE_EP0; i++) {
                 if (subgroup_intstatus & (1 << (i + 1))) {
                     ep_idx = bflb_usb_get_fifo_ep(i);
-                    if (g_bl_udc.in_ep[ep_idx].ep_active) {
+                    bool vdma_write = bflb_usb_vdma_is_write(i);
+                    uint32_t remain = bflb_usb_vdma_get_remain_size(i);
+
+                    if (i == USB_FIFO_F2 && shared3_paired()) {
+                        if (shared3_phase == SHARED3_IN_DMA && vdma_write) {
+                            shared3_phase = SHARED3_IN_HOST;
+                            shared3_restore();
+                        } else if (shared3_phase == SHARED3_OUT_DMA && !vdma_write) {
+                            uint32_t received = g_bl_udc.out_ep[3].xfer_len - remain;
+                            shared3_phase = SHARED3_IDLE;
+                            g_bl_udc.out_ep[3].ep_active = false;
+                            shared3_restore();
+                            usbd_event_ep_out_complete_handler(busid, 0x03, received);
+                            shared3_kick();
+                        }
+                        continue;
+                    }
+
+                    /* Do not infer VDMA direction from ep_active: on a
+                     * bidirectional endpoint an already-armed OUT transfer
+                     * can coexist with a newer IN transfer. */
+                    if (vdma_write && g_bl_udc.in_ep[ep_idx].ep_active) {
                         g_bl_udc.in_ep[ep_idx].ep_active = 0;
                         g_bl_udc.in_ep[ep_idx].actual_xfer_len = g_bl_udc.in_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
                         usbd_event_ep_in_complete_handler(busid, ep_idx | 0x80, g_bl_udc.in_ep[ep_idx].actual_xfer_len);
-                    } else if (g_bl_udc.out_ep[ep_idx].ep_active) {
+                    } else if (!vdma_write && g_bl_udc.out_ep[ep_idx].ep_active) {
                         g_bl_udc.out_ep[ep_idx].ep_active = 0;
-                        g_bl_udc.out_ep[ep_idx].actual_xfer_len = g_bl_udc.out_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
+                        g_bl_udc.out_ep[ep_idx].actual_xfer_len = g_bl_udc.out_ep[ep_idx].xfer_len - remain;
                         usbd_event_ep_out_complete_handler(busid, ep_idx & 0x7f, g_bl_udc.out_ep[ep_idx].actual_xfer_len);
                     }
                 }

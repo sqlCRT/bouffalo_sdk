@@ -699,7 +699,7 @@ static bool usbd_std_endpoint_req_handler(uint8_t busid, struct usb_setup_packet
             break;
         case USB_REQUEST_CLEAR_FEATURE:
             if (setup->wValue == USB_FEATURE_ENDPOINT_HALT) {
-                USB_LOG_ERR("ep:%02x clear halt\r\n", ep);
+                USB_LOG_DBG("ep:%02x clear halt\r\n", ep);
 
                 usbd_ep_clear_stall(busid, ep);
                 break;
