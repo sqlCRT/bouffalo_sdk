@@ -104,14 +104,14 @@ struct bflb_sim_dpi_s {
 
 extern uint32_t __edata_etext_final;
 
-#define PEC_API_INDEX_bflb_pec_dpi_init                        (11)
-#define PEC_API_INDEX_pec_glb_clock_set                        (12)
+#define SIM_API_INDEX_bflb_sim_dpi_init                        (11)
+#define SIM_API_INDEX_sim_glb_clock_set                        (12)
 
 __ALWAYS_INLINE
 int bflb_sim_dpi_init(struct bflb_sim_dpi_s *dpi) {
     uint32_t addr;
     uint32_t offset = (uint32_t)&__edata_etext_final;
-    addr = ((uint32_t *)offset)[PEC_API_INDEX_bflb_pec_dpi_init];
+    addr = ((uint32_t *)offset)[SIM_API_INDEX_bflb_sim_dpi_init];
     addr += offset;
     return ((int (*) (struct bflb_sim_dpi_s *dpi))addr)(dpi);
 }
@@ -120,7 +120,7 @@ __ALWAYS_INLINE
 void sim_glb_clock_set(uint8_t enable, uint8_t src, uint8_t div) {
     uint32_t addr;
     uint32_t offset = (uint32_t)&__edata_etext_final;
-    addr = ((uint32_t *)offset)[PEC_API_INDEX_pec_glb_clock_set];
+    addr = ((uint32_t *)offset)[SIM_API_INDEX_sim_glb_clock_set];
     addr += offset;
     return ((void (*) (uint8_t enable, uint8_t src, uint8_t div))addr)(enable, src, div);
 }

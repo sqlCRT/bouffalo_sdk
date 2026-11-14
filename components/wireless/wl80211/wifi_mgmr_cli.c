@@ -561,8 +561,7 @@ void wifi_sta_info_cmd(int argc, char **argv)
 
 void wifi_keyram_cmd(int argc, char **argv)
 {
-    void mm_sec_keydump(void);
-    mm_sec_keydump();
+    mm_sec_keydump_console();
 }
 
 void wifi_ap_set_max_idle_time_cmd(int argc, char **argv)

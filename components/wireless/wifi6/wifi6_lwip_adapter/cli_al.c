@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
 #include "utils_getopt.h"
 #include "utils_hex.h"
 #ifdef IOT_SDK_ADAPTER
@@ -31,7 +33,6 @@ void wifi_country_add_custom_cmd(int argc, char **argv);
 void wifi_country_remove_custom_cmd(int argc, char **argv);
 void wifi_country_list_custom_cmd(int argc, char **argv);
 void wifi_country_clear_custom_cmd(int argc, char **argv);
-
 #if defined(CFG_CSIDMA_CLI) && CFG_CSIDMA_CLI
 #include "csidma_cmd.h"
 #endif
@@ -47,6 +48,24 @@ void utils_al_parse_number_adv(const char *str, char sep, uint8_t *buf, int bufl
 void utils_al_parse_number(const char *str, char sep, uint8_t *buf, int buflen, int base)
 {
     utils_parse_number(str, sep, buf, buflen, base);
+}
+
+bool utils_al_parse_long(const char *text, long min, long max, long *value)
+{
+    char *end;
+    long parsed;
+
+    if (!text || !text[0] || !value || min > max)
+        return false;
+
+    errno = 0;
+    parsed = strtol(text, &end, 10);
+    if (errno == ERANGE || end == text || *end != '\0' ||
+        parsed < min || parsed > max)
+        return false;
+
+    *value = parsed;
+    return true;
 }
 
 int utils_al_getopt_init(getopt_env_t *env, int opterr)
@@ -723,20 +742,10 @@ void cmd_wifi_sta_ipv6_disable(int argc, char **argv)
 }
 #endif
 
-static void _print_sta_pwr(uint8_t numb, int8_t *power_table)
-{
-    uint8_t i;
-    for (i = 0; i<numb; i++) {
-        printf("%3u ", power_table[i]);
-    }
-    printf("\r\n");
-}
-
 void wifi_sta_info_cmd(int argc, char **argv)
 {
     ip4_addr_t addr, mask, gw, dns;
     int rssi = 0;
-    rf_pwr_table_t power_table;
     char country_code[3] = {0};
     uint8_t channel = 0;
 
@@ -744,14 +753,10 @@ void wifi_sta_info_cmd(int argc, char **argv)
     memset(&mask, 0, sizeof(ip4_addr_t));
     memset(&gw, 0, sizeof(ip4_addr_t));
     memset(&dns, 0, sizeof(ip4_addr_t));
-    memset(power_table.pwr_11b, 0, sizeof(rf_pwr_table_t));
 
     wifi_mgmr_get_country_code(country_code);
     wifi_sta_ip4_addr_get(&addr.addr, &mask.addr, &gw.addr, &dns.addr);
     wifi_mgmr_sta_rssi_get(&rssi);
-#ifndef BL618DG
-    wifi_mgmr_tpc_pwr_get(&power_table);
-#endif
     fhost_printf("================================================================\r\n");
     #ifdef CONFIG_ANTDIV_STATIC
     fhost_printf("ANT :    %d\r\n", antenna_hal_get_current_antenna());
@@ -780,44 +785,62 @@ void wifi_sta_info_cmd(int argc, char **argv)
         }
     }
     #endif
-    fhost_printf("Power Table (dbm):\r\n");
-    fhost_printf("-----------------------------------------------------------\r\n");
-    fhost_printf("  11b:         ");
-    _print_sta_pwr(4,  power_table.pwr_11b);
-    fhost_printf("  11g:         ");
-    _print_sta_pwr(8,  power_table.pwr_11g);
-    fhost_printf("  11n(ht20):   ");
-    _print_sta_pwr(8,  power_table.pwr_11n_ht20);
-    fhost_printf("  11n(ht40):   ");
-    _print_sta_pwr(8,  power_table.pwr_11n_ht40);
-    fhost_printf("  11ac(vht20): ");
-    _print_sta_pwr(10, power_table.pwr_11ac_vht20);
-    fhost_printf("  11ac(vht40): ");
-    _print_sta_pwr(10, power_table.pwr_11ac_vht40);
-#if 0
-    fhost_printf("  11ac(vht80): ");
-    _print_sta_pwr(10, power_table.pwr_11ac_vht80);
-#endif
-    fhost_printf("  11ax(he20):  ");
-    _print_sta_pwr(12, power_table.pwr_11ax_he20);
-    fhost_printf("  11ax(he40):  ");
-    _print_sta_pwr(12, power_table.pwr_11ax_he40);
-#if 0
-    fhost_printf("  11ax(he80):  ");
-    _print_sta_pwr(12, power_table.pwr_11ax_he80);
-    fhost_printf("  11ax(he160): ");
-    _print_sta_pwr(12, power_table.pwr_11ax_he160);
-#endif
     fhost_printf("  last rx rate: format:%s,mcs:%u \r\n", export_stats_get_rx_format(), export_stats_get_rx_mcs());
     fhost_printf("  last tx rate: format:%s,mcs:%u \r\n", export_stats_get_tx_format(), export_stats_get_tx_mcs());
     fhost_printf("================================================================\r\n");
 }
 
+void wifi_mgmr_ap_ip_set_cmd(int argc, char **argv)
+{
+    char *addr, *mask, *gw, *dns;
+
+    if (argc < 2) {
+        printf("[USAGE]: %s <ip> [mask] [gw] [dns]\r\n", argv[0]);
+        return;
+    }
+
+    addr = argv[1];
+    mask = (argc > 2) ? argv[2] : "255.255.255.0";
+    gw = (argc > 3) ? argv[3] : "0.0.0.0";
+    dns = (argc > 4) ? argv[4] : "0.0.0.0";
+
+    wifi_mgmr_ap_ip_set(inet_addr(addr), inet_addr(mask), inet_addr(gw), inet_addr(dns));
+}
+
 #if MACSW_BEACONING
+static void wifi_mgmr_ap_start_usage(const char *command)
+{
+    printf("[USAGE]: %s -s <ssid> [-k <key>] [-a <akm>] "
+           "[-c <channel>] [-b <bandwidth>] [-A <0|1>]\r\n", command);
+    printf("               [-t <inactivity_s>] [-h <0|1>] [-i <0|1>] "
+           "[-g <0|1>] [-d <0|1>]\r\n");
+    printf("               [-I <ipv4_addr>] [-S <pool_start>] "
+           "[-L <pool_limit>] [-n <beacon_TU>] [-w <0|1>]\r\n");
+    printf("  -s: SSID (required)\r\n");
+    printf("  -k: key; omitted for an open AP\r\n");
+    printf("  -a: AKM, e.g. OPEN, WPA, WPA2/RSN, or WPA3/SAE; OPEN cannot use -k\r\n");
+    printf("  -c: primary channel; BL618DG default is the first legal 5GHz channel;\r\n");
+    printf("      with ACS enabled, channel selects the band (0 uses the chip default).\r\n");
+    printf("  -A: startup ACS, 0=disabled (default), 1=enabled; 20MHz surveys, -b selects AP bandwidth\r\n");
+    printf("  -b: bandwidth, 0=20MHz (default), 1=40MHz, 2=80MHz\r\n");
+    printf("  -t: maximum station inactivity in seconds\r\n");
+    printf("  -h: hidden SSID, 0=disabled (default), 1=enabled\r\n");
+    printf("  -i: AP isolation, 0=disabled (default), 1=enabled\r\n");
+    printf("  -g: configure AP IPv4, 0=disabled, 1=enabled (default)\r\n");
+    printf("  -d: DHCP server, 0=disabled, 1=enabled (default)\r\n");
+    printf("  -I: AP IPv4 address; subnet mask is fixed to 255.255.255.0\r\n");
+    printf("  -S: DHCP pool start host number\r\n");
+    printf("  -L: DHCP pool lease count\r\n");
+    printf("  -n: beacon interval in TU; 0 selects the default 100 TU\r\n");
+    printf("  -w: disable WMM, 0=keep enabled (default), 1=disable\r\n");
+}
+
 void wifi_mgmr_ap_start_cmd(int argc, char **argv)
 {
     getopt_env_t getopt_env;
     int opt;
+    int ret;
+    long value;
     wifi_mgmr_ap_params_t config;
 
     if (argc < 2) {
@@ -831,10 +854,21 @@ void wifi_mgmr_ap_start_cmd(int argc, char **argv)
     config.use_dhcpd = true;
 
     utils_al_getopt_init(&getopt_env, 0);
-    while ((opt = utils_al_getopt(&getopt_env, argc, argv, "b:s:k:c:a:t:h:i:g:d:I:S:L:n:w:")) != -1) {
+    while ((opt = utils_al_getopt(&getopt_env, argc, argv, "b:s:k:c:a:t:h:i:g:d:I:S:L:n:w:A:")) != -1) {
         switch (opt) {
+        case 'A':
+            if (!getopt_env.optarg || !utils_al_parse_long(getopt_env.optarg, 0, 1, &value))
+                goto _ERROUT;
+            config.acs = value != 0;
+            break;
 	case 'b':
-	    config.type = (uint8_t)atoi(getopt_env.optarg);
+	    if (!getopt_env.optarg || getopt_env.optarg[0] < '0' ||
+                getopt_env.optarg[0] > '9' ||
+                !utils_al_parse_long(getopt_env.optarg, 0, 2, &value)) {
+                printf("Invalid bandwidth: expected 0, 1, or 2\r\n");
+                goto _ERROUT;
+            }
+            config.type = (uint8_t)value;
 	    break;
 
 	case 's':
@@ -846,7 +880,13 @@ void wifi_mgmr_ap_start_cmd(int argc, char **argv)
 	    break;
 
 	case 'c':
-	    config.channel = (uint8_t)atoi(getopt_env.optarg);
+	    if (!getopt_env.optarg || getopt_env.optarg[0] < '0' ||
+                getopt_env.optarg[0] > '9' ||
+                !utils_al_parse_long(getopt_env.optarg, 0, UINT8_MAX, &value)) {
+                printf("Invalid channel: expected a decimal value from 0 to 255\r\n");
+                goto _ERROUT;
+            }
+            config.channel = (uint8_t)value;
 	    break;
 
 	case 'a':
@@ -904,12 +944,24 @@ void wifi_mgmr_ap_start_cmd(int argc, char **argv)
         goto _ERROUT;
     }
 
-    wifi_mgmr_ap_start(&config);
+    if (config.akm != NULL && config.key != NULL &&
+        strcmp(config.akm, "OPEN") == 0) {
+        printf("OPEN AKM cannot be used with a key\r\n");
+        goto _ERROUT;
+    }
+
+    /* Deferred-cal debug: AP start uses FULL IQ at channel switch, not MM_RF_CAL. */
+    RFCAL_PRINTF("[RFCAL] AP_START ssid=%s ch=%u hidden=%u\r\n",
+           config.ssid, config.channel, config.hidden_ssid);
+    ret = wifi_mgmr_ap_start(&config);
+    if (ret) {
+        printf("\r\nwifi_ap_start failed, ret=%d\r\n", ret);
+    }
 
     return;
 
  _ERROUT:
-    printf("[USAGE]: %s -s <ssid> [-k <key>] [-c <channel>] [-a <akm>] [-I <ipv4_addr>] [-S <dhcpd_start>] [-L <dhcpd_limit>] [-n <bcn_interval>]\r\n", argv[0]);
+    wifi_mgmr_ap_start_usage(argv[0]);
     return;
 }
 
@@ -931,6 +983,8 @@ void wifi_mgmr_ap_chan_switch_cmd(int argc, char **argv)
     if (argc > 2)
         cs_count = (uint8_t)atoi(argv[2]);
 
+    /* Deferred-cal debug: AP CSA FORCE runs on CHANNEL_SWITCH_IND, not here. */
+    RFCAL_PRINTF("[RFCAL] AP_CSA ch=%d cs_count=%u\r\n", channel, cs_count);
     wifi_mgmr_ap_chan_switch(channel, cs_count);
 }
 #endif
@@ -1099,12 +1153,8 @@ static int cmd_mat(int argc, char *argv[])
 #endif
 
 SHELL_CMD_EXPORT_ALIAS(cmd_hello, hello, test cli hello);
-SHELL_CMD_EXPORT_ALIAS(cmd_phy, phy, test cli hello);
 #ifdef CMD_TXL_CNTRL_PUSH_AC_ENABLE
 SHELL_CMD_EXPORT_ALIAS(cmd_ac_set, ac_set, access_category config);
-#endif
-#ifdef CFG_FOR_COEXISTENCE_TEST_STOPAP_PATCH
-SHELL_CMD_EXPORT_ALIAS(cmd_ap_stop, ap_stop, ap stop);
 #endif
 SHELL_CMD_EXPORT_ALIAS(wifi_ap_bcn_mode_set_cmd, bcn_mode_set, wifi ap bcn mode set);
 SHELL_CMD_EXPORT_ALIAS(wifi_mgmr_ap_acl_set_cmd, ap_acl_set, wifi ap acl set);
@@ -1118,6 +1168,7 @@ SHELL_CMD_EXPORT_ALIAS(cmd_wifi_sniffer_on, wifi_sniffer_on, wifi sniffer on);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_sniffer_off, wifi_sniffer_off, wifi sniffer off);
 #endif
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_state_get, wifi_state, get wifi state);
+SHELL_CMD_EXPORT_ALIAS(wifi_verbosity_cmd, wifi_verbosity, query or set MAC automatic diagnostics);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_sta_dhcp_client_start, wifi_sta_dhcp, wifi station dhcp client start);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_sta_rssi_get, wifi_sta_rssi, get wifi sya rssi);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_sta_channel_get, wifi_sta_channel, get wifi channel);
@@ -1132,23 +1183,31 @@ SHELL_CMD_EXPORT_ALIAS(wifi_sta_ps_set_cmd, wifi_sta_ps_set, wifi sta powersave 
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_sta_ipv6_enable, wifi_sta_ipv6_enable, enable STA IPv6);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_sta_ipv6_disable, wifi_sta_ipv6_disable, disable STA IPv6);
 #endif
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_enable_cmd, wifi_sta_coex_enable, wifi sta coex enable);
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_disable_cmd, wifi_sta_coex_disable, wifi sta coex disable);
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_duty_set_cmd, wifi_sta_coex_duty_set, wifi sta coex duty set);
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_status_cmd, wifi_sta_coex_status, wifi sta coex status);
-#ifdef BL618DG
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_bt_spdt_cmd, wifi_coex_bt_spdt, wifi coex bt spdt ctrl);
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_bt_adj_pwr_cmd, wifi_coex_bt_adj_pwr, wifi coex bt adjusted tx power);
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_bt_adj_pwr_off_cmd, wifi_coex_bt_adj_pwr_off, wifi coex bt adjusted tx power off);
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_bt_overlay_cmd, wifi_coex_bt_overlay, wifi coex bt channel overlay);
-SHELL_CMD_EXPORT_ALIAS(wifi_coex_bt_overlay_off_cmd, wifi_coex_bt_overlay_off, wifi coex bt channel overlay off);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_board_config_cmd, wifi_coex_board_config, declare coex board wiring);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_init_cmd, wifi_coex_init, prepare coex RF mode before stack startup);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_start_cmd, wifi_coex_start, wifi coex start);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_stop_cmd, wifi_coex_stop, wifi coex stop);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_duty_set_cmd, wifi_coex_duty_set, wifi coex duty set);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_status_cmd, wifi_coex_status, wifi coex status);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_protection_cmd, wifi_coex_protection, wifi coex protection);
+#if defined(CONFIG_WIFI_COEX_DEBUG_CLI)
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_board_config_cmd, wifi_coex_debug_board_config, declare or show coex board wiring);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_debug_status_cmd, wifi_coex_debug_status, wifi coex debug status);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_debug_spdt_bt_cmd, spdt_bt, debug force SPDT to BT);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_debug_spdt_2g_cmd, spdt_2g, debug force SPDT to 2G);
+#ifdef CONFIG_COEX_SPDT_EXPERIMENT
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_debug_spdt_pta_cmd, spdt_pta, EXPERIMENT ONLY hand GPIO to prepared PTA);
+#endif
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_debug_bt_spdt_cmd, wifi_coex_debug_bt_spdt, wifi coex debug bt spdt ctrl);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_debug_bt_overlay_cmd, wifi_coex_debug_bt_overlay, wifi coex debug bt channel overlay);
+SHELL_CMD_EXPORT_ALIAS(wifi_coex_debug_bt_adj_pwr_cmd, wifi_coex_debug_bt_adj_pwr, wifi coex debug bt adjusted tx power);
 #endif
 SHELL_CMD_EXPORT_ALIAS(wifi_sta_info_cmd, wifi_sta_info, wifi sta info);
 #if MACSW_BEACONING
 SHELL_CMD_EXPORT_ALIAS(wifi_ap_sta_list_get_cmd, wifi_sta_list, get sta list in AP mode);
 SHELL_CMD_EXPORT_ALIAS(wifi_ap_sta_delete_cmd, wifi_sta_del, delete one sta in AP mode);
 SHELL_CMD_EXPORT_ALIAS(wifi_mgmr_ap_start_cmd, wifi_ap_start, start AP mode);
-SHELL_CMD_EXPORT_ALIAS(wifi_ap_coex_enable_cmd, wifi_ap_coex_enable, wifi ap coex enable);
+SHELL_CMD_EXPORT_ALIAS(wifi_mgmr_ap_ip_set_cmd, wifi_ap_set_ip, set AP static IP);
 SHELL_CMD_EXPORT_ALIAS(wifi_mgmr_ap_stop_cmd, wifi_ap_stop, stop AP mode);
 SHELL_CMD_EXPORT_ALIAS(wifi_mgmr_ap_chan_switch_cmd, wifi_ap_chan_switch, AP channel switch: <channel> [cs_count]);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_ap_mac_get, wifi_ap_mac_get, get wifi ap mac);
@@ -1188,8 +1247,9 @@ SHELL_CMD_EXPORT_ALIAS(cmd_wifi_mgmr_sta_twt_statusget, wifi_mgmr_sta_twt_status
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_mode_set, wifi_mode_set, set ap/sta mode);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_get_tx_remaining, get_tx_remaining, get tx remaining);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_power_get, wifi_power_get, get 20MHz tx power for mode/mcs);
+SHELL_CMD_EXPORT_ALIAS(cmd_wifi_power_dump, wifi_power_dump, dump current country power tables [channel]);
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_channel_get, wifi_channel_get, get current country code channel information);
-#if defined(BL616CL)
+#if WIFI6_HAS_CCA_CLI
 SHELL_CMD_EXPORT_ALIAS(cmd_wifi_cca, wifi_cca, get/set CCA threshold or set AC1 REC);
 #endif
 #if WIFI_STATISTIC_ENABLE

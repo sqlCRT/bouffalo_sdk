@@ -33,6 +33,7 @@ int udp_socket_open(UdpSocket* udp_socket, int family, int port) {
   struct sockaddr* sa;
   socklen_t sock_len;
 
+  udp_socket->send_error_count = 0;
   udp_socket->bind_addr.family = family;
   switch (family) {
     case AF_INET6:
@@ -95,8 +96,9 @@ int udp_socket_open(UdpSocket* udp_socket, int family, int port) {
 }
 
 void udp_socket_close(UdpSocket* udp_socket) {
-  if (udp_socket->fd > 0) {
+  if (udp_socket && udp_socket->fd >= 0) {
     close(udp_socket->fd);
+    udp_socket->fd = -1;
   }
 }
 
@@ -107,6 +109,7 @@ int udp_socket_sendto(UdpSocket* udp_socket, Address* addr, const uint8_t* buf, 
 
   if (udp_socket->fd < 0) {
     LOGE("sendto before socket init");
+    errno = EBADF;
     return -1;
   }
 
@@ -125,7 +128,16 @@ int udp_socket_sendto(UdpSocket* udp_socket, Address* addr, const uint8_t* buf, 
   }
 
   if ((ret = sendto(udp_socket->fd, buf, len, 0, sa, sock_len)) < 0) {
-    LOGE("Failed to sendto: %s", strerror(errno));
+    int saved_errno = errno;
+    udp_socket->send_error_count++;
+    if (udp_socket->send_error_count == 1 ||
+        (udp_socket->send_error_count % 64U) == 0) {
+      LOGE("Failed to sendto: %s (%u failures)", strerror(saved_errno),
+           udp_socket->send_error_count);
+    }
+    /* libc formatting or an application log sink may change errno. The
+     * DTLS BIO needs the original socket error to distinguish pressure. */
+    errno = saved_errno;
     return -1;
   }
 

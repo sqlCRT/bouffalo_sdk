@@ -26,7 +26,7 @@ void peer_log(char* level_tag, const char* file_name, int line_number, const cha
   peer_log(level_tag, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 #else
 #define LOG_PRINT(level_tag, fmt, ...) \
-  printf("%s\t%s\t%d\t" fmt "\r\n", level_tag, __FILE__, __LINE__, ##__VA_ARGS__)
+  printf("%s\t%s\t%d\t" fmt "\n", level_tag, __FILE__, __LINE__, ##__VA_ARGS__)
 #endif
 
 #if LOG_LEVEL >= LEVEL_DEBUG
@@ -55,7 +55,17 @@ void peer_log(char* level_tag, const char* file_name, int line_number, const cha
 
 #define ALIGN32(num) ((num + 3) & ~3)
 
-void utils_random_string(char* s, const int len);
+int utils_random_string(char* s, int len);
+
+int utils_random_bytes(unsigned char* output, size_t length);
+
+/* One RNG per owner/connection: no process-global state or platform mutex.
+ * Serialize access with the same owner rules as Agent/PeerConnection. */
+typedef struct UtilsRandom UtilsRandom;
+UtilsRandom* utils_random_create(void);
+void utils_random_destroy(UtilsRandom* random);
+int utils_random_get_bytes(UtilsRandom* random, unsigned char* output, size_t length);
+int utils_random_get_string(UtilsRandom* random, char* output, int length);
 
 void utils_get_hmac_sha1(const char* input, size_t input_len, const char* key, size_t key_len, unsigned char* output);
 

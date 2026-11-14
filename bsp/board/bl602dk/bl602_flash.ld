@@ -27,10 +27,11 @@ MEMORY
 {
     fw_header_memory  (rx)  : ORIGIN = 0x23000000 - 0x1000, LENGTH = 4K
     xip_memory  (rx)  : ORIGIN = 0x23000000, LENGTH = 1024K
-    itcm_memory (rx)  : ORIGIN = 0x22010000, LENGTH = 16K
-    ram_memory  (!rx) : ORIGIN = 0x42014000, LENGTH = 184K
-    ram_wifi    (wxa) : ORIGIN = 0x42042000 , LENGTH = (112K - 64K - 8K - __EM_SIZE) /*leave 8K left for BLE*/
+    ram_memory  (!rx) : ORIGIN = 0x4200C000, LENGTH = 216K - __EM_SIZE
+    ram_wifi    (wxa) : ORIGIN = 0x42042000 - __EM_SIZE, LENGTH = 40K /*reserve 8K for BLE EM*/
 }
+
+ASSERT(ORIGIN(ram_memory) + LENGTH(ram_memory) <= ORIGIN(ram_wifi), "application RAM overlaps Wi-Fi RAM")
 
 SECTIONS
 {
@@ -49,11 +50,17 @@ SECTIONS
 	. = ORIGIN(xip_memory) + 512;
         __multi_bins__ = ABSOLUTE(.);
         LONG(0x464C4553) LONG(0x00000000) /*SELF*/      LONG(4K)         LONG(4K)
+        LONG(0) LONG(0)
         LONG(0x52415744) LONG(0x49464346) /*DWARFCFI*/  LONG(0x00000000) LONG(0x00000000)
+        LONG(0) LONG(0)
         LONG(0x464D4F52) LONG(0x00000053) /*ROMFS*/     LONG(0x00000000) LONG(0x00000000)
+        LONG(0) LONG(0)
         LONG(0x54524543) LONG(0x00000053) /*CERTS*/     LONG(0x00000000) LONG(0x00000000)
+        LONG(0) LONG(0)
         LONG(0x4F545541) LONG(0x5453494C) /*AUTOLIST*/  LONG(0x00000000) LONG(0x00000000)
+        LONG(0) LONG(0)
         LONG(0xFFFFFFFF) LONG(0xFFFFFFFF)               LONG(0xFFFFFFFF) LONG(0xFFFFFFFF)
+        LONG(0) LONG(0)
 
     } > xip_memory
 
@@ -122,8 +129,6 @@ SECTIONS
         /* _dump_sections for bflb_coredump.c*/
         . = ALIGN(4);
         PROVIDE( _dump_sections = ABSOLUTE(.));
-        LONG(ORIGIN(itcm_memory));
-        LONG(LENGTH(itcm_memory));
         LONG(ORIGIN(ram_memory));
         LONG(LENGTH(ram_memory));
         LONG(0xffffffff);
@@ -177,7 +182,7 @@ SECTIONS
 
         . = ALIGN(4);
         __tcm_code_end__ = .;
-    } > itcm_memory
+    } > ram_memory
 
     __dtcm_load_addr = __itcm_load_addr + SIZEOF(.itcm_region);
 
@@ -244,6 +249,46 @@ SECTIONS
         . = ALIGN(4);
         __bflb_log_tags_end__ = .;
         __ram_data_end__ = .;
+    } > ram_memory
+
+    /* Picolibc thread-local storage. The boot TLS block is consumed by
+     * bflb_picolibc_init_boot_tls() before main(); FreeRTOS allocates a TLS
+     * block from each task stack afterwards. */
+    __tls_load_addr = LOADADDR(RAM_DATA) + SIZEOF(RAM_DATA);
+
+    ram_tdata : AT (__tls_load_addr)
+    {
+        *(.tdata .tdata.* .gnu.linkonce.td.*)
+    } > ram_memory
+
+    ram_tbss (NOLOAD) :
+    {
+        *(.tbss .tbss.* .gnu.linkonce.tb.*)
+        *(.tcommon)
+        __tls_end = .;
+    } > ram_memory
+
+    PROVIDE(__tdata_start = ADDR(ram_tdata));
+    PROVIDE(__tdata_source = LOADADDR(ram_tdata));
+    PROVIDE(__tdata_size = SIZEOF(ram_tdata));
+    PROVIDE(__tbss_start = ADDR(ram_tbss));
+    PROVIDE(__tbss_offset = ADDR(ram_tbss) - ADDR(ram_tdata));
+    PROVIDE(__tbss_size = SIZEOF(ram_tbss));
+    PROVIDE(__tls_base = ADDR(ram_tdata));
+    PROVIDE(__tls_align = MAX(MAX(ALIGNOF(ram_tdata), ALIGNOF(ram_tbss)), 4));
+    PROVIDE(__tls_size = __tls_end - __tls_base);
+
+    ram_tbss_space (NOLOAD) :
+    {
+        . = ADDR(ram_tbss);
+        . = . + SIZEOF(ram_tbss);
+    } > ram_memory
+
+    ram_tls_boot (NOLOAD) :
+    {
+        . = ALIGN(__tls_align);
+        PROVIDE(__boot_tls_start = .);
+        . = . + __tls_size;
     } > ram_memory
 
     /*put wifibss in the first place*/

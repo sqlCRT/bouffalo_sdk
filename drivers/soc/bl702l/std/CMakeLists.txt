@@ -14,6 +14,7 @@ sdk_library_add_sources(src/bl702l_aon.c)
 sdk_library_add_sources(src/bl702l_clock.c)
 sdk_library_add_sources(src/bl702l_common.c)
 sdk_library_add_sources(src/bl702l_glb.c)
+sdk_library_add_sources(src/bl702l_glb_gpio.c)
 sdk_library_add_sources(src/bl702l_hbn.c)
 sdk_library_add_sources(src/bl702l_l1c.c)
 sdk_library_add_sources(src/bl702l_pds.c)
@@ -32,12 +33,8 @@ include
 include/hardware
 )
 
-SET(MCPU "riscv-e24")
-SET(MARCH "rv32imafc")
-SET(MABI "ilp32f")
-
 sdk_add_compile_definitions(-DARCH_RISCV -DBFLB_USE_HAL_DRIVER)
-sdk_add_compile_options(-march=${MARCH} -mabi=${MABI})
-sdk_add_link_options(-march=${MARCH} -mabi=${MABI})
+sdk_add_compile_options(${BFLB_RISCV_ARCH_FLAGS})
+sdk_add_link_options(${BFLB_RISCV_ARCH_FLAGS})
 
 sdk_add_compile_definitions(-DCONFIG_IRQ_NUM=80)

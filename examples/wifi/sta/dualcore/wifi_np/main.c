@@ -48,6 +48,9 @@
 #ifdef CONFIG_IPC
 #include <flash_ops_rpmsg.h>
 #endif
+#ifdef CONFIG_SOCKET_OFFLOAD
+#include "socket_offload.h"
+#endif
 
 #define DBG_TAG "MAIN"
 #include "log.h"
@@ -82,6 +85,13 @@ void wifi_start_firmware_task(void *param)
         LOG_E("RPMsg Flash receiver init failed: %d\r\n", ret);
         return;
     }
+#ifdef CONFIG_SOCKET_OFFLOAD
+    ret = rpc_service_init();
+    if (ret != 0) {
+        vTaskDelete(NULL);
+        return;
+    }
+#endif
     LOG_I("RPMsg Flash receiver initialized\r\n");
 #endif
 
@@ -137,6 +147,14 @@ void wifi_event_handler(async_input_event_t ev, void *priv)
         } break;
         case CODE_WIFI_ON_AP_STA_DEL: {
             LOG_I("[APP] [EVT] [AP] [DEL] %lld\r\n", xTaskGetTickCount());
+        } break;
+        case CODE_WIFI_ON_AP_CSA_DONE: {
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_AP_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
+        } break;
+        case CODE_WIFI_ON_STA_CSA_DONE: {
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_STA_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
         } break;
         default: {
             LOG_I("[APP] [EVT] Unknown code %u \r\n", code);

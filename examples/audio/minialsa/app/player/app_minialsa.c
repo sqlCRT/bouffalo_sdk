@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <devices/drv_snd_bl616.h>
+#include <devices/drv_snd.h>
 
 #include <msp/kernel.h>
 #include <alsa/pcm.h>
@@ -1692,9 +1692,9 @@ SHELL_CMD_EXPORT_ALIAS(cmd_minialsa_output_clock_test, minialsa_output_clock_tes
 
 static void board_audio_init(void)
 {
-    snd_bl616_config_t snd_config;
+    snd_config_t snd_config;
 
-    snd_card_bl616_register(&snd_config);
+    snd_card_register(&snd_config);
 }
 
 int app_minialsa_init(void)

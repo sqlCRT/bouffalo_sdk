@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "audio_codec.h"
+
 #ifndef CONFIG_WAVE_PLAYER_OUT_SAMPLES
 #define WAVE_PLAYER_OUT_SAMPLES 512
 #else
@@ -28,26 +30,30 @@
 #define WAVE_PLAYER_ENABLE_REC CONFIG_WAVE_PLAYER_ENABLE_REC
 #endif
 
-#ifndef CONFIG_WAVE_PLAYER_ENABLE_REC_LOOPBACK
-#define WAVE_PLAYER_ENABLE_REC_LOOPBACK 0
-#else
-#define WAVE_PLAYER_ENABLE_REC_LOOPBACK CONFIG_WAVE_PLAYER_ENABLE_REC_LOOPBACK
-#endif
-
 #ifndef CONFIG_I2S_DSP_MODE
 #define WAVE_PLAYER_I2S_DSP_MODE 0
 #else
 #define WAVE_PLAYER_I2S_DSP_MODE CONFIG_I2S_DSP_MODE
 #endif
 
+/* Zero derives bus slots from active I2S channels and the detected codec's
+ * frame requirements. JY6316 uses four slots, including playback-only;
+ * incompatible explicit slot counts are rejected during configuration. */
 #ifndef CONFIG_WAVE_PLAYER_I2S_TX_SLOTS
 #define WAVE_PLAYER_I2S_TX_SLOTS 0U
 #else
 #define WAVE_PLAYER_I2S_TX_SLOTS CONFIG_WAVE_PLAYER_I2S_TX_SLOTS
 #endif
+#if WAVE_PLAYER_I2S_DSP_MODE && WAVE_PLAYER_I2S_TX_SLOTS != 0U && \
+    WAVE_PLAYER_I2S_TX_SLOTS != 1U && WAVE_PLAYER_I2S_TX_SLOTS != 2U && \
+    WAVE_PLAYER_I2S_TX_SLOTS != 3U && WAVE_PLAYER_I2S_TX_SLOTS != 4U && \
+    WAVE_PLAYER_I2S_TX_SLOTS != 6U
+#error "WAVE_PLAYER_I2S_TX_SLOTS must be 0, 1, 2, 3, 4 or 6"
+#endif
 
 #ifndef CONFIG_WAVE_PLAYER_I2S_DSP_LR_MERGE
-#define WAVE_PLAYER_I2S_DSP_LR_MERGE WAVE_PLAYER_I2S_DSP_MODE
+/* Disabled Kconfig booleans are emitted as #undef. */
+#define WAVE_PLAYER_I2S_DSP_LR_MERGE 0
 #else
 #define WAVE_PLAYER_I2S_DSP_LR_MERGE CONFIG_WAVE_PLAYER_I2S_DSP_LR_MERGE
 #endif
@@ -90,7 +96,8 @@
 
 #if WAVE_PLAYER_ENABLE_REC
 #ifndef CONFIG_WAVE_PLAYER_ENABLE_REC_RB
-#define WAVE_PLAYER_ENABLE_REC_RB 1
+/* Disabled Kconfig booleans are emitted as #undef. */
+#define WAVE_PLAYER_ENABLE_REC_RB 0
 #else
 #define WAVE_PLAYER_ENABLE_REC_RB CONFIG_WAVE_PLAYER_ENABLE_REC_RB
 #endif
@@ -122,19 +129,6 @@
 #define WAVE_PLAYER_CAP_DMA_BLOCKS CONFIG_WAVE_PLAYER_REC_DMA_BLOCKS
 #endif
 
-/* 0: left, 1: right, 2: average(L/R) */
-#ifndef CONFIG_WAVE_PLAYER_REC_MONO_SOURCE
-#define WAVE_PLAYER_REC_MONO_SOURCE 0U
-#else
-#define WAVE_PLAYER_REC_MONO_SOURCE CONFIG_WAVE_PLAYER_REC_MONO_SOURCE
-#endif
-
-/* In DSP mode this is a direct channel index. Otherwise 0: left, 1: right. */
-#ifndef CONFIG_WAVE_PLAYER_REC_LOOPBACK_SOURCE
-#define WAVE_PLAYER_REC_LOOPBACK_SOURCE 1U
-#else
-#define WAVE_PLAYER_REC_LOOPBACK_SOURCE CONFIG_WAVE_PLAYER_REC_LOOPBACK_SOURCE
-#endif
 #endif
 
 typedef struct {
@@ -160,6 +154,16 @@ typedef uint8_t wave_player_backend_t;
 #define WAVE_PLAYER_CAPTURE_BACKEND_DEFAULT CONFIG_WAVE_PLAYER_CAPTURE_BACKEND
 #endif
 
+/* Physical roles in interleaved DMA slot order, configured by the board's
+ * audio integration. Bit N denotes slot N, not an analog ADC pin number.
+ * Masks must be disjoint and fit the capture channel count. Unmarked slots
+ * have unspecified roles (e.g. empty or auxiliary data); zero means unknown.
+ * These describe available inputs, not application selection/mixing policy. */
+typedef struct {
+    uint32_t mic_mask;
+    uint32_t ref_mask;
+} wave_player_capture_layout_t;
+
 typedef struct {
     const char *i2s_dev_name;
     const char *i2c_dev_name;
@@ -169,10 +173,28 @@ typedef struct {
     const char *auadc_dev_name;
     wave_player_backend_t playback_backend;
     wave_player_backend_t capture_backend;
+    /* AUDIO_CODEC_TYPE_UNKNOWN accepts the first codec found by the scanner. */
+    audio_codec_type_t required_ext_codec_type;
+    /* Zero preserves the default priorities (playback=3, capture=2).
+     * Streaming applications can run DMA consumers above their DSP/network. */
+    uint8_t playback_task_priority;
+    uint8_t capture_task_priority;
+    wave_player_capture_layout_t capture_layout;
 } wave_player_hw_cfg_t;
 
+/* Initialize once from a single owner before calling other player APIs.
+ * A successful init is retained across stop/start and recording sessions;
+ * another init returns -1 without changing that instance. deinit is not
+ * implemented. On failure, no RTOS objects/tasks are retained and init may be
+ * retried; board/codec writes are reapplied, not undone. No DMA is started by
+ * init. Do not call start/recording APIs unless init returned 0. */
 int wave_player_init(const wave_player_hw_cfg_t *hw_cfg);
 void wave_player_deinit(void);
+/* Mutating legacy APIs refuse PCM-owned hardware: signed-result APIs return
+ * -EBUSY, unsigned byte-count APIs return zero, and void config/flush calls do
+ * nothing. Use audio_pcm controls for those sessions; read-only snapshots remain
+ * available. In-flight legacy operations also prevent the first PCM session
+ * from opening; initial hardware setup remains a quiescent, single-owner operation. */
 int wave_player_start(void);
 int wave_player_suspend(void);
 int wave_player_resume(void);
@@ -185,31 +207,63 @@ bool wave_player_get_mute(void);
 int wave_player_set_record_volume(uint8_t volume);
 int wave_player_set_record_pga(uint8_t pga);
 int wave_player_feed(uint8_t *data, uint32_t len);
+/* Queued source PCM, excluding PCM prefetched by the player/resampler and
+ * blocks scheduled for DMA. This is a snapshot, not a latency measurement
+ * or a reservation. */
+uint32_t wave_player_get_buffered_bytes(void);
+/* Discard oldest complete source PCM frames beyond this byte budget. Returns
+ * bytes discarded; preserves newer PCM, prefetched PCM and scheduled DMA
+ * blocks. This limits queued backlog; trim(0) does not immediately silence
+ * output. Use flush to invalidate pending source playback, and mute/stop
+ * to control output. */
+uint32_t wave_player_trim_buffer(uint32_t max_bytes);
 uint32_t wave_player_feed_blocking(uint8_t *data, uint32_t len);
 void wave_player_config(uint32_t samplerate_hz, uint32_t tx_block_bytes, uint32_t rx_block_bytes, uint8_t channels);
 void wave_player_dump_stack(void);
 
-#if WAVE_PLAYER_ENABLE_REC
-typedef void (*wave_player_rec_mono_frame_cb_t)(const int16_t *samples, uint32_t sample_count, uint32_t sample_rate_hz,
-                                                void *user_data);
+/* Called from the player task with interleaved PCM scheduled for DMA, after
+ * resampling and silence padding, before channel/slot packing. The buffer is
+ * borrowed for the duration of the call. Keep the callback nonblocking. Set or
+ * clear it only while playback is stopped. Useful as a software AEC reference.
+ * Hardware loopback capture remains preferable where the board provides it. */
+typedef void (*wave_player_playback_frame_cb_t)(const int16_t *samples, uint32_t samples_per_channel,
+                                               uint32_t sample_rate_hz, uint8_t channels, void *user_data);
+int wave_player_set_playback_callback(wave_player_playback_frame_cb_t cb, void *user_data);
+/* Discard queued source PCM. DMA already scheduled may play for two blocks. */
+void wave_player_flush(void);
 
-#if WAVE_PLAYER_ENABLE_REC_LOOPBACK
-typedef void (*wave_player_rec_loopback_frame_cb_t)(const int16_t *samples, uint32_t sample_count,
-                                                    uint32_t sample_rate_hz, void *user_data);
-#endif
+#if WAVE_PLAYER_ENABLE_REC
+/* Complete interleaved signed 16-bit PCM in DMA slot order:
+ * samples[i * channels + c] belongs to slot c of sample i. No selection,
+ * mixing or reference extraction is applied. Layout comes from hw_cfg.
+ * Called from the capture task, not the DMA ISR. The frame and PCM buffer
+ * are borrowed until return; copy both before deferring work to another task.
+ * Keep the callback nonblocking; register/clear it while recording is stopped. */
+typedef struct {
+    const int16_t *samples;
+    uint32_t samples_per_channel;
+    uint32_t sample_rate_hz;
+    uint8_t channels;
+    wave_player_capture_layout_t layout;
+    /* Monotonic DMA completion sequence; gaps expose dropped descriptors. */
+    uint32_t sequence;
+    /* Changes whenever the shared capture DMA timeline is reconfigured. */
+    uint32_t epoch;
+    /* Samples elapsed in this DMA epoch, including dropped callback blocks. */
+    uint64_t first_sample_index;
+} wave_player_rec_frame_t;
+typedef void (*wave_player_rec_cb_t)(const wave_player_rec_frame_t *frame, void *user_data);
 
 int wave_player_rec_start(uint32_t duration_ms, uint32_t sample_rate_hz, uint8_t channels);
 int wave_player_rec_stop(void);
+/* Optional legacy mono ring: averages hw_cfg.capture_layout.mic_mask only.
+ * A nonzero mic_mask is required to store mono samples; an unknown layout
+ * leaves this ring empty and warns at init. The raw callback is unaffected. */
 int wave_player_rec_get_mono(int16_t *dst, uint32_t max_samples, uint32_t *out_samples);
-int wave_player_rec_set_callback(wave_player_rec_mono_frame_cb_t cb, void *user_data);
+int wave_player_rec_set_callback(wave_player_rec_cb_t cb, void *user_data);
 int wave_record_enable(bool enable);
 bool wave_record_is_enabled(void);
 
-#if WAVE_PLAYER_ENABLE_REC_LOOPBACK
-int wave_player_rec_loopback_set_callback(wave_player_rec_loopback_frame_cb_t cb, void *user_data);
-int wave_loopback_enable(bool enable);
-bool wave_loopback_is_enabled(void);
-#endif
 #endif
 
 #endif

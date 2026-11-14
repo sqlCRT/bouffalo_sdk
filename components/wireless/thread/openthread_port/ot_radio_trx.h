@@ -28,9 +28,36 @@
 #define OT_RADIO_CSL_DEBUG                  0
 #endif
 
+#if OT_RADIO_CSL_DEBUG
+/* per-frame CSL landing record: filled by the radio ISR with pure integer
+ * ops, printed later by the radio task so printf never delays the 15.4
+ * interrupt processing */
+typedef struct ot_radio_rx_dbg {
+    uint8_t   valid;
+    uint8_t   in_win;        /* SFD inside the armed window, on the window channel */
+    uint8_t   on_win_ch;     /* radio was sitting on the window channel at RX_DONE */
+    uint8_t   has_csl_ie;    /* received frame carried a CSL IE (parent role) */
+    uint8_t   seq;
+    uint8_t   src_is_saddr;
+    uint16_t  src_saddr;
+    uint16_t  csl_phase;     /* from the received CSL IE */
+    uint16_t  csl_period;
+    uint16_t  ack_phase;     /* next-rx-window phase (10-sym units) we put in the enh-ack */
+    uint32_t  sfd_sym;
+    int32_t   drift_us;      /* received SFD vs our csl sample time */
+    int32_t   edge_start_us; /* SFD offset from window start */
+    int32_t   edge_end_us;   /* window end minus SFD */
+    int32_t   ack_desc_diff_us; /* enh-ack advertised window vs our sample grid, mod period (actual ack sfd) */
+    int32_t   ack_exec_err_us;  /* enh-ack actual sfd vs its generation-time target */
+} ot_radio_rx_dbg_t;
+#endif
+
 typedef struct _otRadio_rxFrame_t {
     utils_dlist_t       dlist;
     otRadioFrame        frame;
+#if OT_RADIO_CSL_DEBUG
+    ot_radio_rx_dbg_t   dbg;
+#endif
 } otRadio_rxFrame_t;
 
 typedef struct {

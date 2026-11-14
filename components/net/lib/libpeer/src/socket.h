@@ -6,6 +6,7 @@
 typedef struct UdpSocket {
   int fd;
   Address bind_addr;
+  unsigned int send_error_count;
 } UdpSocket;
 
 typedef struct TcpSocket {

@@ -340,6 +340,7 @@ static void gen_prov_ack_send(u8_t xact_id)
 static void gen_prov_cont(struct prov_rx *rx, struct net_buf_simple *buf)
 {
 	u8_t seg = CONT_SEG_INDEX(rx->gpc);
+	int offset;
 
 	BT_DBG("len %u, seg_index %u", buf->len, seg);
 
@@ -370,7 +371,7 @@ static void gen_prov_cont(struct prov_rx *rx, struct net_buf_simple *buf)
 		return;
 	}
 
-	if (seg > link.rx.last_seg) {
+	if (!seg || seg > link.rx.last_seg) {
 		BT_ERR("Invalid segment index %u", seg);
 		prov_failed(PROV_ERR_NVAL_FMT);
 		return;
@@ -381,12 +382,14 @@ static void gen_prov_cont(struct prov_rx *rx, struct net_buf_simple *buf)
 		return;
 	}
 
-	if (XACT_SEG_OFFSET(seg) + buf->len > RX_BUFFER_MAX) {
+	offset = XACT_SEG_OFFSET(seg);
+	if (offset < 0 || offset > RX_BUFFER_MAX ||
+		buf->len > RX_BUFFER_MAX - offset) {
 		BT_WARN("Rx buffer overflow. Malformed generic prov frame?");
 		return;
 	}
 
-	memcpy(XACT_SEG_DATA(seg), buf->data, buf->len);
+	memcpy(&link.rx.buf->data[offset], buf->data, buf->len);
 	XACT_SEG_RECV(seg);
 
 	if (seg == link.rx.last_seg && !(link.rx.seg & BIT(0))) {

@@ -6,7 +6,7 @@
 #include "rfparam_adapter.h"
 
 #include "bflb_mtd.h"
-#include "easyflash.h"
+#include "lfs_kv.h"
 
 #include <lwip/tcpip.h>
 
@@ -20,11 +20,6 @@
 #define DBG_TAG "MAIN"
 #include "log.h"
 #include "async_event.h"
-
-static struct bflb_device_s *uart0;
-
-#define WIFI_STACK_SIZE  (1536)
-#define TASK_PRIORITY_FW (16)
 
 extern void shell_init_with_task(struct bflb_device_s *shell);
 extern void wifi_event_handler(async_input_event_t ev, void *priv);
@@ -40,6 +35,28 @@ extern int btble_cli_start(void);
 
 void wifi_start_firmware_task(void *param)
 {
+    struct bflb_device_s *uart0;
+
+    /* Run filesystem and RF initialization on this task's stack, not the 1 KiB startup stack. */
+    bflb_mtd_init();
+    /* ble stack need lfs_kv */
+    lfs_kv_init();
+
+    /* Init rf */
+    if (0 != rfparam_init(0, NULL, 0)) {
+        printf("PHY RF init failed!\r\n");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    uart0 = bflb_device_get_by_name("uart0");
+    shell_init_with_task(uart0);
+
+    tcpip_init(NULL, NULL);
+#if defined(CONFIG_BLUETOOTH)
+    btble_cli_start();
+#endif
+
     LOG_I("Starting wifi ...\r\n");
 
     async_register_event_filter(EV_WIFI, wifi_event_handler, NULL);
@@ -105,6 +122,14 @@ void wifi_event_handler(async_input_event_t ev, void *priv)
         case CODE_WIFI_ON_AP_STA_DEL: {
             LOG_I("[APP] [EVT] [AP] [DEL] %lld\r\n", xTaskGetTickCount());
         } break;
+        case CODE_WIFI_ON_AP_CSA_DONE: {
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_AP_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
+        } break;
+        case CODE_WIFI_ON_STA_CSA_DONE: {
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_STA_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
+        } break;
         default: {
             LOG_I("[APP] [EVT] Unknown code %u \r\n", code);
         }
@@ -117,24 +142,7 @@ int main(void)
 
     configASSERT((configMAX_PRIORITIES > 4));
 
-    uart0 = bflb_device_get_by_name("uart0");
-    shell_init_with_task(uart0);
-
-    bflb_mtd_init();
-    /* ble stack need easyflash kv */
-    easyflash_init();
-
-    /* Init rf */
-    if (0 != rfparam_init(0, NULL, 0)) {
-        printf("PHY RF init failed!\r\n");
-        return 0;
-    }
-
-    tcpip_init(NULL, NULL);
     xTaskCreate(wifi_start_firmware_task, "wifi init", 1024, NULL, 10, NULL);
-#if defined(CONFIG_BLUETOOTH)
-    btble_cli_start();
-#endif
 
     vTaskStartScheduler();
 

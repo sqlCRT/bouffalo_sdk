@@ -45,8 +45,14 @@ sdk_add_compile_options(
     -save-temps=obj
 )
 
-if(NOT DEFINED CONFIG_NO_SHORT_ENUMS)
+if(NOT CONFIG_NO_SHORT_ENUMS)
     sdk_add_compile_options(-fshort-enums)
+endif()
+
+# BL618DG A0 uses a different register map and IRQ table. The SoC headers
+# select those definitions through CPU_MODEL_A0.
+if("${CHIP}" STREQUAL "bl618dg" AND "${CPU_MODEL}" STREQUAL "a0")
+    sdk_add_compile_definitions(CPU_MODEL_A0)
 endif()
 
 if(CONFIG_GCC_COMPILE_LTO)
@@ -64,16 +70,14 @@ sdk_add_link_options(
     -Wl,--print-memory-usage
 )
 
+if(CONFIG_GCC_LINK_NO_RELAX)
+    sdk_add_link_options(-Wl,--no-relax)
+endif()
+
 if("${CHIP}" STREQUAL "bl618dg" AND "${CPU_MODEL}" STREQUAL "b0")
-    sdk_add_link_options(
-        --specs=picolibc.specs
-    )
     sdk_add_link_libraries(c m stdc++ gcc)
 else()
-    sdk_add_link_options(
-        --specs=nano.specs
-    )
-    sdk_add_link_libraries(c m)
+    sdk_add_link_libraries(c m gcc)
 endif()
 
 if(("${CHIP}" STREQUAL "bl618dg") AND ("${CPU_MODEL}" STREQUAL "b0") AND (NOT("${CPU_ID}" STREQUAL "lp")))

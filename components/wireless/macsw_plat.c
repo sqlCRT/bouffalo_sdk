@@ -17,7 +17,7 @@
 #define MACSW_PLATFORM_PDS_CNT_TO_US(cnt) ((uint64_t)(cnt) * 15625 / 512)
 #endif
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 #include "bl_lp.h"
 static volatile iot2lp_para_t *piot2lp_para = (iot2lp_para_t *)IOT2LP_PARA_ADDR;
 
@@ -42,6 +42,39 @@ extern int lpfw_recal_rc32k(lp_fw_rc32k_trim_t *p_rc32k_trim_param, uint64_t bea
 #endif
 
 #define DBG_TAG              "MACSW"
+
+_Static_assert(CONFIG_WIFI_VERBOSITY_DEFAULT >= WIFI_DIAG_FATAL &&
+               CONFIG_WIFI_VERBOSITY_DEFAULT <= WIFI_DIAG_OFF,
+               "Invalid Wi-Fi verbosity default");
+
+static volatile uint8_t g_wifi_verbosity = CONFIG_WIFI_VERBOSITY_DEFAULT;
+
+int wifi_verbosity_set(int level)
+{
+    if (level < WIFI_DIAG_FATAL || level > WIFI_DIAG_OFF) {
+        return -1;
+    }
+    g_wifi_verbosity = (uint8_t)level;
+    return 0;
+}
+
+int wifi_verbosity_get(void)
+{
+    return g_wifi_verbosity;
+}
+
+bool wifi_verbosity_enabled(uint8_t severity)
+{
+#if defined(CONFIG_MACSW_LOG_NO_PRINT) || defined(CONFIG_LOG_DISABLE)
+    (void)severity;
+    return false;
+#else
+    uint8_t threshold = g_wifi_verbosity;
+
+    return severity <= WIFI_DIAG_TRACE && threshold != WIFI_DIAG_OFF &&
+           severity <= threshold;
+#endif
+}
 
 #if MACSW_TWT && defined(CFG_WIFI_TWT_PDS15_ENABLE)
 int macsw_platform_get_time_us(uint64_t *time_us)
@@ -115,7 +148,7 @@ uint32_t wifi_sys_now_ms(bool isr)
 #undef wifi_syslog
 void wifi_syslog(int priority, const char *fmt, ...)
 {
-#ifndef CONFIG_NO_FW_BL_LOG_PRINT
+#if !defined(CONFIG_MACSW_LOG_NO_PRINT) && !defined(CONFIG_LOG_DISABLE)
     static const struct {
         const char *level;
         const char *color_start;
@@ -128,14 +161,28 @@ void wifi_syslog(int priority, const char *fmt, ...)
         { "R", "", "" },                  /* 4: Raw - Default */
     };
 
-    const char *level_str = "I";
-    const char *color_start = "";
-    const char *color_end = "";
+    uint8_t severity;
 
-    if (priority >= 0 && priority < 5) {
-        level_str = log_config[priority].level;
-        color_start = log_config[priority].color_start;
-        color_end = log_config[priority].color_end;
+    if (!fmt || priority < 0 || priority > 4) {
+        return;
+    }
+
+    severity = priority == 4 ? WIFI_DIAG_INFO : (uint8_t)(priority + 1);
+    if (priority == 4) {
+        /* Only consume the existing D_ encodings, at most two prefix bytes. */
+        for (unsigned int i = 0; i < 2; i++) {
+            unsigned char prefix = (unsigned char)*fmt;
+
+            if (prefix >= 0x9a && prefix <= 0x9e) {
+                severity = (uint8_t)(prefix - 0x9a);
+            } else if (prefix < 0x80 || prefix > 0x8c) {
+                break;
+            }
+            fmt++;
+        }
+    }
+    if (!wifi_verbosity_enabled(severity)) {
+        return;
     }
 
     va_list args;
@@ -143,13 +190,16 @@ void wifi_syslog(int priority, const char *fmt, ...)
 
     if (priority == 4) {
         vprintf(fmt, args);
-        va_end(args);
-    } else if (priority == 0) {
-        printf("%s[%s][" DBG_TAG "] ", color_start, level_str);
+    } else {
+        printf("%s[%s][" DBG_TAG "] ", log_config[priority].color_start,
+               log_config[priority].level);
         vprintf(fmt, args);
-        printf("%s", color_end);
-        va_end(args);
+        printf("%s", log_config[priority].color_end);
     }
+    va_end(args);
+#else
+    (void)priority;
+    (void)fmt;
 #endif
 }
 
@@ -194,7 +244,7 @@ void bl_tpc_power_table_get(int8_t *power_table)
 }
 #endif
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 int8_t hal_macsw_lp_rssi_restore(void)
 {
     return piot2lp_para->wifi_parameter->bcn_target_level;

@@ -11,17 +11,32 @@ struct ieee80211_dot_d;
 #define MAC_ADDR_LIST(m) (m)[0], (m)[1], (m)[2], (m)[3], (m)[4], (m)[5]
 
 #define WIFI_MGMR_CONFIG_SCAN_ITEM_TIMEOUT    (15000)
-#define WIFI_MGMR_SCAN_ITEMS_MAX (50)
+#define WIFI_MGMR_AP_STA_AUTH_FAIL_QUEUE_DEPTH (8)
+#define WIFI_MGMR_CHANNEL_SURVEY_MAX (64)
+
+typedef struct wifi_mgmr_channel_survey_cache {
+    wifi_mgmr_channel_survey_t result;
+    uint8_t is_used;
+} wifi_mgmr_channel_survey_cache_t;
 
 typedef struct mode{
     char* mode_str;
     int mode;
 }wifimode_t;
 
+enum wlan_netif_state {
+    WLAN_NETIF_DISCONNECTED = 0,
+    WLAN_NETIF_CONNECTING,
+    WLAN_NETIF_CONNECTED,
+    WLAN_NETIF_STOPPED = WLAN_NETIF_DISCONNECTED,
+    WLAN_NETIF_STARTING = WLAN_NETIF_CONNECTING,
+    WLAN_NETIF_STARTED = WLAN_NETIF_CONNECTED,
+};
+
 struct wlan_netif {
-    int mode;//0: sta; 1: ap
-    int started;
-    int set;
+    uint8_t mode;//0: sta; 1: ap
+    enum wlan_netif_state state;
+    uint8_t set;
     uint8_t mac[6];
 };
 
@@ -47,7 +62,13 @@ typedef struct wifi_mgmr {
 
     rtos_mutex scan_items_lock;
     rtos_mutex ap_sta_info_lock;
-    wifi_mgmr_scan_item_t scan_items[WIFI_MGMR_SCAN_ITEMS_MAX];
+    wifi_mgmr_scan_item_t *scan_items;
+    uint16_t scan_items_count;
+    wifi_ap_sta_auth_fail_info_t ap_sta_auth_fail_queue[WIFI_MGMR_AP_STA_AUTH_FAIL_QUEUE_DEPTH];
+    uint8_t ap_sta_auth_fail_head;
+    uint8_t ap_sta_auth_fail_tail;
+    uint8_t ap_sta_auth_fail_count;
+    wifi_mgmr_channel_survey_cache_t channel_surveys[WIFI_MGMR_CHANNEL_SURVEY_MAX];
     //the params info for sta connecting
     wifi_mgmr_sta_connect_params_t sta_connect_param;
     //router info for sta mode
@@ -62,6 +83,7 @@ typedef struct wifi_mgmr {
 
     /*Manager config*/
     int scan_item_timeout;
+    uint32_t scan_start_time;
     // the all channel nums for some country code include 2.4G & 5G
     uint8_t channel24G_num;
     uint8_t channel24G_start;
@@ -110,6 +132,10 @@ typedef struct wifi_mgmr {
 } wifi_mgmr_t;
 extern wifi_mgmr_t wifiMgmr;
 
+/* Scan cache storage is provided by the customer-configurable fhost_config library. */
+extern wifi_mgmr_scan_item_t wifi_mgmr_scan_items[];
+extern const uint16_t wifi_mgmr_scan_items_count;
+
 int wifi_mgmr_init(void);
 
 /* Bitmap conversion functions */
@@ -126,11 +152,17 @@ int wifi_mgmr_task_start(void);
 int wifi_mgmr_get_channel_nums(const char *country_code, uint8_t *c24G_cnt, uint8_t *c5G_cnt);
 char *wifi_mgmr_auth_to_str(uint8_t auth);
 char *wifi_mgmr_cipher_to_str(uint8_t cipher);
+void wifi_mgmr_scan_items_scan_start(void);
 int wifi_mgmr_scan_beacon_save( wifi_mgmr_scan_item_t *scan );
+void wifi_mgmr_scan_channel_surveys_clear(void);
+void wifi_mgmr_scan_channel_survey_update(uint8_t channel, uint8_t utilization);
 void wifi_mgmr_sta_info_reset();
 void wifi_mgmr_sta_info_upatestatus(uint16_t status_code, uint16_t reason_code);
 void wifi_mgmr_sta_info_save(void *param);
 int wifi_mgmr_sta_connect_params_get();
 void wifi_mgmr_ap_sta_info_del(uint8_t sta_idx);
 void wifi_mgmr_ap_sta_info_add(uint8_t sta_idx, uint16_t aid, struct mac_addr *addr);
+void wifi_mgmr_scan_frame_notify(const uint8_t *data, uint16_t length, uint16_t frequency, int16_t rssi);
+void wifi_mgmr_scan_frame_callback_clear(void);
+int wifi_mgmr_ap_sta_auth_fail_notify(const wifi_ap_sta_auth_fail_info_t *info);
 #endif

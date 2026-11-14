@@ -1,10 +1,24 @@
 # libfvad: voice activity detection (VAD) library #
+
+English | [简体中文](README_CN.md)
 [![Build Status](https://travis-ci.org/dpirch/libfvad.svg?branch=master)](https://travis-ci.org/dpirch/libfvad)
 
 This is a fork of the VAD engine that is part of the WebRTC Native Code package
 (https://webrtc.org/native-code/), for use as a standalone library independent
 from the rest of the WebRTC code. There are currently no changes in
 functionality.
+
+## Bouffalo SDK Integration
+
+Enable `CONFIG_MULTIMEDIA=y` and `CONFIG_LIBFVAD=y` in the application configuration.
+The SDK builds the bundled sources through CMake; the Autotools commands below
+apply to standalone host builds. See [include/fvad.h](include/fvad.h) for the API.
+
+Create an instance with `fvad_new()`, select a mode (0–3) and sample rate, process
+signed 16-bit mono frames with `fvad_process()`, then release it with `fvad_free()`.
+Supported rates are 8, 16, 32, and 48 kHz; frames must span 10, 20, or 30 ms.
+For example, 16 kHz / 20 ms requires 320 samples. The result is 1 for speech,
+0 for non-speech, or -1 for an invalid frame length. Check setup errors too.
 
 ## Building and Installing ##
 libfvad uses autoconf/automake and can be build and installed with the usual:

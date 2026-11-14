@@ -1,4 +1,5 @@
-CONFIG_NEWLIB               =y
+-include $(BL_SDK_BASE)/examples/openamp/defconfig
+
 # Components
 CONFIG_BFLB_LOG             =n
 CONFIG_FREERTOS             =y

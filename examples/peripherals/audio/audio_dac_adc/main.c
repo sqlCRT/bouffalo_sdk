@@ -101,6 +101,7 @@ int main(void)
         .auadc_dev_name = "auadc",
         .playback_backend = WAVE_PLAYER_BACKEND_BL_CODEC,
         .capture_backend = WAVE_PLAYER_BACKEND_BL_CODEC,
+        .capture_layout = { .mic_mask = 0x01U },
     };
     if (wave_player_init(&audio_hw_cfg) != 0) {
         printf("[ERROR] wave_player_init failed\r\n");

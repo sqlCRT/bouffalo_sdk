@@ -1207,6 +1207,16 @@ struct wpa_driver_associate_params {
 	 * 2 = both hunting-and-pecking loop and hash-to-element enabled
 	 */
 	int sae_pwe;
+
+	/**
+	 * auth_assoc_timeout_sec - Auth/Assoc budget for this association, in seconds.
+	 *
+	 * Same value later armed with wpa_supplicant_req_auth_timeout().
+	 * 0 means the driver keeps its default Auth/Assoc retry limit.
+	 * Values above 299 are passed as 299. One ke_timer delay must stay under 300 s.
+	 * Not used for EAPOL timeouts.
+	 */
+	int auth_assoc_timeout_sec;
 };
 
 enum hide_ssid {
@@ -2260,6 +2270,11 @@ struct wpa_bss_params {
 #define WPA_STA_TDLS_PEER BIT(4)
 #define WPA_STA_AUTHENTICATED BIT(5)
 #define WPA_STA_ASSOCIATED BIT(6)
+#ifdef CONFIG_WIFI_WDS
+/* MACSW-local bit. Upstream hostap has no Multi-AP station flag.
+ * Keep this bit local so a future hostap low-bit flag does not collide. */
+#define WPA_STA_MULTI_AP BIT(31)
+#endif
 
 enum tdls_oper {
 	TDLS_DISCOVERY_REQ,

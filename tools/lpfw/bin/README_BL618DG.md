@@ -1,56 +1,56 @@
-Release Date: 2026-07-20
-Release Author: mlwang
-Git Commit Version: 0183eb445e45c6da87ac2e21e6793a61d587da5e
+Release Date: 2026-10-23
+Release Author: whuan
+Git Commit Version: dc95dd702df08cd2fd5f21602694d14aab1853dd
 
 Submodule Information:
 -3bc6321603b0ab07c39ebdbe6ad1c65e0f4beb45 ../../../../components/crypto/mbedtls/mbedtls
 -4c3acca7109deb4dca6956dd5f3ceaf0947dee58 ../../../../components/crypto/mbedtls/mbedtls_v3
--5e709d00c86de2ab064a16a848c87f941d72cab9 ../../../../components/fs
--34a853821e47bdae5f74aa1069c7367cf642372b ../../../../components/graphics
+-8a1758f6f0d659d21701db966059e69cd9897b12 ../../../../components/fs
+-b6edf14d79d23ba6974e56730b0f936177cac782 ../../../../components/graphics
 -8431fe111a8d0f09a463a8d1f3eb42a7de753892 ../../../../components/ipc/libmetal/libmetal
--76a12961fceda27871eb9338ae802c2797babad9 ../../../../components/ipc/open-amp/open-amp
--04f088698ad94bb2e88a90efacd8af58ab65fcab ../../../../components/multimedia
--eebdb1e454248f49a61e279910a99fb304137d8a ../../../../components/net/lwip/lwip
--7856a837f8fd955708148ba3920dae1036f22290 ../../../../components/net/netbus/atmodule
--41b066b0b68fe113c7a808546454bb3f1b9b1205 ../../../../components/net/netbus/host_router
+-05bfa4d771d42132a585fa322498d369232216ec ../../../../components/ipc/open-amp/open-amp
+-e7f98d6324f3f3878d2ee5d6265bed609e62c174 ../../../../components/multimedia
+-d53624f592fc3be7a2d9c16920330650f68874fa ../../../../components/net/lwip/lwip
+-9124bfbb188994882489b6020982f7b1308f79e7 ../../../../components/net/netbus/atmodule
+-8d7374a3ffa44812590b0f75b36498f8dff0a0f9 ../../../../components/net/netbus/host_router
 -47765b8917a01ff6e2bfbab891f151291b63e028 ../../../../components/net/nethub/host_linux
--621ccd5eedb262f1b7e01ab4bca7131bda3034a5 ../../../../components/usb/cherryusb
+-a5c3e0808e3dc188c49e75b5fe482459c29447da ../../../../components/usb/cherryusb
 -ab3e6d96e00da02beee1372f00d3f53811c8c48e ../../../../components/wireless/bl3141_drv
--9a6ec27de5eb3f9209be316e56c836aee869a777 ../../../../components/wireless/bluetooth
--d449add7c7384ccaaccb0687b3dcb76c6091c481 ../../../../components/wireless/lmac154
--dc0e651095854c2612d85ef61bd04a62a2bcf82e ../../../../components/wireless/macsw
+-e4d0f519c96703e40f8a341e3d0ab45e3aa436dd ../../../../components/wireless/bluetooth
+-0dc5f1307c5993383b058bae0848583e6d2dbcba ../../../../components/wireless/lmac154
+-86fd9436447caa1c8d0c0ae51eb649bb795d5d64 ../../../../components/wireless/macsw
 -f15f28f97477c5e60e685ca33d1711ac321e1d1c ../../../../components/wireless/matter/mfd
--a31c373320deb859543f5e3883437a7e72b91054 ../../../../components/wireless/thread
--b6eb2298ceac2e5a90d68284501b895ed6e0352f ../../../../components/wireless/wifi4/firmware
--0d5268129950681791c2e12ffa2a045ab68a822a ../../../../components/wireless/wifi4/manager
--0c837e421e1116272db4c1ae19f8de7b17a8bb50 ../../../../components/wireless/wifi6
--82913cad570be7a344ec00c0e51a961c9e5e7167 ../../../../components/wireless/wl80211
--3a8b7753d7ec4325ca1e0488361fcc1b63f132df ../../../../components/wireless/wlan/linux_driver
--ae603b4bbec1819f5cf61996dd246a961a970b5d ../../../../components/wireless/wlan/wlan_mac
--a82fe317de9045aed2d6857ebec5a1467049bfce ../../../../components/wireless/zigbee
--2b89652a1ba29ccc1f672a5439035af0a89e2ba8 ../../../../drivers/lhal
+-37990b5c2a0265f7c5f793bb97869b16d30411d4 ../../../../components/wireless/thread
+-820badeede80b2f95c271b0446af4725f8edcc0a ../../../../components/wireless/wifi4/firmware
+-558df9c7539a7699d34fc4b0c4d71af74ca1129a ../../../../components/wireless/wifi4/manager
+-00dfd793126c49b0ea5aff23283875291aa660fe ../../../../components/wireless/wifi6
+-d2b7a9e423805995bb99ecd64b44df0687bfe027 ../../../../components/wireless/wl80211
+-17b4b0c515858338b8ac46ad6f8e7419480a4597 ../../../../components/wireless/wlan/linux_driver
+-84ce1ab9070ece27a0599a93a56d80be7ff4ef93 ../../../../components/wireless/wlan/wlan_mac
+-f1ddbc3714305080c3d4f43401be972a52bec071 ../../../../components/wireless/zigbee
+-911501a52fe09e454b95c6236678e338eb138e36 ../../../../drivers/lhal
 -25ffb329a3b97c5d4fc79d66c60e0b988882d996 ../../../../drivers/soc/bl602/phyrf
 -1d253d273aa044ec80c3b0a0f17a7a6f0a0531e1 ../../../../drivers/soc/bl602/std
--f910c86e6083dee8946203ca9d582c2c91ebd169 ../../../../drivers/soc/bl616/phyrf
--790d43579ade7f78e481e830b2c6f08346f808cc ../../../../drivers/soc/bl616/std
--6d6bf83b664ae544e1323333981b8fa61a583eda ../../../../drivers/soc/bl616cl/phyrf
--7fc4ee0456f36008410b66c1ae980352671adc96 ../../../../drivers/soc/bl616cl/std
--0b5106db2b2d56bf696c520be617c7cfbdcedd22 ../../../../drivers/soc/bl618dg/phyrf
--fb56b2000fafe6cddb70ea97c62ba845634f1e22 ../../../../drivers/soc/bl618dg/std
+-450aef3d18fe1eb9333f833f9e3cde8ba056e3a3 ../../../../drivers/soc/bl616/phyrf
+-7a68447cd346187d13b0de287e316c826eaaf6e1 ../../../../drivers/soc/bl616/std
+-216bdf53aca8dce7989c51d0f3ca9d0b4642cbc3 ../../../../drivers/soc/bl616cl/phyrf
+-366ff34dce5b652d7b761bd3c740cc2bfe264677 ../../../../drivers/soc/bl616cl/std
+-bd10e387618e4f91d2c7ca5b643e86743917c42f ../../../../drivers/soc/bl618dg/phyrf
+-2e04e7f418d047bf803468fc953fdf72058a9ac9 ../../../../drivers/soc/bl618dg/std
 -712e35f8da9fc43c920cd0259a04ed9a78276d01 ../../../../drivers/soc/bl702/phyrf
--63ff630710365510a76d5884f9263d95434b3263 ../../../../drivers/soc/bl702/std
+-0eb29ac433b54e2c55fdf99f29cc036982f6e1d2 ../../../../drivers/soc/bl702/std
 -89a6a4072e1f48b1d245deced6c0cd44f65b77fb ../../../../drivers/soc/bl702l/phyrf
--829debea7cc1af9cd07da9f1b3397d3c703533db ../../../../drivers/soc/bl702l/std
--1eefd9cde1bfbf40587fb5c42536827ab96ce1ce ../../../../drivers/sys
--060fc2d67573a2acdedeb7fcc41cac38d6557b4c ../../../../tools/autotest
--11d409a9ff451ba3d8658d4ed4e6f3b9da587193 ../../../../tools/bflb_tools
+-e5a4a460bfbea8036dc9638e7b371ebaed69827b ../../../../drivers/soc/bl702l/std
+-1297ba7d0d257be5ffeaaced0612bc114d204fee ../../../../drivers/sys
+-3a2c64f662b1c6d74302326645ad41a41f810684 ../../../../tools/autotest
+-14fcd4a6c694825bb04d3dc943ab6fa2c3daaca3 ../../../../tools/bflb_tools
 
 Validation Baseline:
 - Target: BL618DG B0
 - Build command: make CHIP=bl618dg BOARD=bl618dg_lpfw_board CPU_ID=ap CPU_MODEL=b0 MAKE_LPFW=y LOG_SEL=2 CONFIG_ROMAPI=y
 - LPFW binary: lpfw_bin/bl618dg_lp_fw.bin
-- Binary size: 37792 bytes
-- SHA256: 71089e6c13843672adccd2bc34e79c95956f1ded5640f402761984302eb2c83a
+- Binary size: 48960 bytes
+- SHA256: cf486b4a35f088b54494180a31029ad491981cb0a06158ff963e4a0bffd3c425
 - Link memory: check build output and build/build_out/lp_fw_bl618dg_ap.map
 - Sync target: tools/lpfw/bin/bl618dg_lp_fw.bin
 - Consumer app: examples/pmu/wl_lp

@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include "bl_crt_bundle.h"
 
+/* mbedTLS 2 exposes these members directly; 3 uses MBEDTLS_PRIVATE(). */
+#ifndef MBEDTLS_PRIVATE
+#define MBEDTLS_PRIVATE(member) member
+#endif
+
 #define DBG_TAG "BL_CERT"
 #include "log.h"
 
@@ -95,7 +100,11 @@ int bl_crt_verify_callback(void *buf, mbedtls_x509_crt *crt, int depth, uint32_t
         name_len = s_crt_bundle.crts[middle][0] << 8 | s_crt_bundle.crts[middle][1];
         crt_name = s_crt_bundle.crts[middle] + CRT_HEADER_OFFSET;
 
-        int cmp_res = memcmp(child->issuer_raw.p, crt_name, name_len );
+        size_t compare_len = child->issuer_raw.len < name_len ? child->issuer_raw.len : name_len;
+        int cmp_res = memcmp(child->issuer_raw.p, crt_name, compare_len);
+        if (cmp_res == 0 && child->issuer_raw.len != name_len) {
+            cmp_res = child->issuer_raw.len < name_len ? -1 : 1;
+        }
         if (cmp_res == 0) {
             crt_found = true;
             break;

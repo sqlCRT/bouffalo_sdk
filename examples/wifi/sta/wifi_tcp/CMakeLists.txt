@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.15)
 find_package(bouffalo_sdk REQUIRED HINTS $ENV{BL_SDK_BASE})
 
 # User
-sdk_add_compile_definitions(-DCONFIG_CLI_CMD_ENABLE)
 
 if(NOT "${CHIP}" STREQUAL "bl602")
     sdk_add_compile_definitions(-DHIGH_PERFORMANCE_PBUF=1)
@@ -25,6 +24,10 @@ endif()
 target_sources(app PRIVATE
                    wifi_tcp_client.c
                    wifi_tcp_server.c)
+
+if(NOT "${CHIP}" STREQUAL "bl602")
+    target_sources(app PRIVATE wifi_scan_callback.c)
+endif()
 
 sdk_add_include_directories(.)
 

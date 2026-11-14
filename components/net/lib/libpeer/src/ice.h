@@ -50,13 +50,25 @@ struct IceCandidatePair {
   IceCandidate* remote;
   int conncheck;
   uint64_t priority;
+  uint8_t validated;
+  uint8_t nominating;
+  uint8_t remote_nominated;
+  /* 0 ordinary, 1 queued triggered check, 2 triggered transaction in flight. */
+  uint8_t triggered;
+  /* Bounded per-pair connectivity transaction, independent of consent. */
+  uint32_t check_id[3];
+  uint32_t check_started_ms;
+  uint32_t check_sent_ms;
+  uint32_t check_rto_ms;
+  int check_pending;
 };
 
 void ice_candidate_create(IceCandidate* ice_candidate, int foundation, IceCandidateType type, Address* addr);
 
 void ice_candidate_to_description(IceCandidate* candidate, char* description, int length);
 
-int ice_candidate_from_description(IceCandidate* candidate, char* description, char* end);
+int ice_candidate_from_description(IceCandidate* candidate, const char* description,
+                                   const char* end);
 
 int ice_candidate_get_local_address(IceCandidate* candidate, Address* address);
 

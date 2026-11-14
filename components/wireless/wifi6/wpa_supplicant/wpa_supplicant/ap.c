@@ -37,6 +37,14 @@
 #include "ap.h"
 #include "ap/sta_info.h"
 #include "notify.h"
+#ifdef CONFIG_MACSW
+#include "fhost.h"
+#include "fhost_wpa.h"
+#endif
+#ifdef CONFIG_WIFI_WDS
+#include "fhost.h"
+#include "fhost_wds.h"
+#endif
 
 
 #ifdef CONFIG_WPS
@@ -367,8 +375,9 @@ int wpa_supplicant_conf_ap_ht(struct wpa_supplicant *wpa_s,
 				 * configuration now to avoid such cases that
 				 * would lead to group formation failures. */
 				if (wpa_s->conf->p2p_ht40_2g4) {
-					conf->secondary_channel = wpas_p2p_get_ht40_mode(wpa_s, mode,
-											 conf->channel);
+					conf->secondary_channel =
+						wpas_p2p_get_sec_channel_offset_40mhz(
+							wpa_s, mode, conf->channel);
 					conf->ht_no_overlap_check = 1;
 				} else {
 					wpa_printf(MSG_DEBUG,
@@ -456,6 +465,22 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 	conf->driver = wpa_s->driver;
 
 	os_strlcpy(bss->iface, wpa_s->ifname, sizeof(bss->iface));
+
+#ifdef CONFIG_WIFI_WDS
+	{
+		int vif = fhost_vif_idx_from_name(wpa_s->ifname);
+		wifi_wds_config_t wds;
+
+		if (vif >= 0 &&
+		    fhost_wds_auto_enabled(vif, WIFI_WDS_ROLE_AP) &&
+		    fhost_wds_config_get(vif, &wds) == WIFI_WDS_OK) {
+			/* Backhaul capability only identifies a four-address STA. Ciphers follow the AP configuration. */
+			bss->multi_ap = BACKHAUL_BSS;
+			if (wds.allow_normal_sta)
+				bss->multi_ap |= FRONTHAUL_BSS;
+		}
+	}
+#endif /* CONFIG_WIFI_WDS */
 
 	if (wpa_supplicant_conf_ap_ht(wpa_s, ssid, conf))
 		return -1;
@@ -917,6 +942,10 @@ static void wpas_ap_configured_cb(void *ctx)
 		   hostapd_state_text(wpa_s->ap_iface->state));
 	if (wpa_s->ap_iface->state == HAPD_IFACE_DISABLED) {
 		wpa_supplicant_ap_deinit(wpa_s);
+#ifdef CONFIG_MACSW
+		fhost_wpa_send_event(FHOST_WPA_DISCONNECTED, NULL, 0,
+				     fhost_vif_idx_from_name(wpa_s->ifname));
+#endif
 		return;
 	}
 
@@ -1620,12 +1649,12 @@ int ap_ctrl_iface_sta_disassociate(struct wpa_supplicant *wpa_s,
                                         txtaddr);
 }
 int ap_ctrl_iface_acl_enable(struct wpa_supplicant *wpa_s,
-                                  const char *txtaddr)
+                                  const char *acl_mode)
 {
     if (wpa_s->ap_iface == NULL)
         return -1;
     return hostapd_ctrl_iface_acl_enable(wpa_s->ap_iface->bss[0],
-                                        txtaddr);
+                                        acl_mode);
 }
 
 

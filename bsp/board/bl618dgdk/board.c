@@ -12,7 +12,6 @@
 #include "bflb_boot2.h"
 #endif
 #include "bflb_sec_mutex.h"
-#include "bflb_xip_sflash.h"
 #include "bflb_sf_ctrl.h"
 #include "bflb_acomp.h"
 #include "bflb_efuse.h"
@@ -24,6 +23,9 @@
 #include "bl618dg_pm.h"
 
 #include "mm.h"
+#if defined(CONFIG_PSRAM) || defined(CONFIG_PSRAM_XIP)
+#include "psram_heap_init.h"
+#endif
 
 #ifdef CONFIG_BSP_CONSOLE_USB_CDC
 #include "usb_console.h"
@@ -37,19 +39,13 @@ extern void log_start(void);
 
 extern uint32_t __HeapBase;
 extern uint32_t __HeapLimit;
-#ifdef CONFIG_DUALCORE_DISABLE
 extern uint8_t _heap_wifi_start;
 extern uint8_t _heap_wifi_size;
-#endif
-#ifndef CPU_LP
-extern uint32_t __psram_heap_base;
-extern uint32_t __psram_limit;
-
-extern uint32_t __psram_data_start__;
-extern uint32_t __psram_data_end__;
-extern uint32_t __psram_noinit_start__;
-extern uint32_t __psram_noinit_end__;
-#endif
+static const uint32_t any_alloc_order[] = {
+    MM_HEAP_OCRAM_0,
+    MM_HEAP_PSRAM_0,
+    MM_HEAP_WRAM_0,
+};
 
 #if (defined(CONFIG_LUA) || defined(CONFIG_BFLB_LOG) || defined(CONFIG_FATFS))
 static struct bflb_device_s *rtc;
@@ -111,7 +107,12 @@ static void ATTR_CLOCK_SECTION __attribute__((noinline, unused)) system_clock_in
     }
 }
 
-#ifndef LP_APP
+enum bflb_rtc_32k_clk_type board_get_rtc_32k_clk_type(void)
+{
+    return BFLB_RTC_32K_CLK_RC;
+}
+
+#ifndef CONFIG_LPAPP
 static void __attribute__((unused)) peripheral_clock_init(void)
 {
     if (GLB_CORE_ID_AP == GLB_Get_Core_Type()) {
@@ -135,7 +136,6 @@ static void __attribute__((unused)) peripheral_clock_init(void)
         PERIPHERAL_CLOCK_USB_ENABLE();
         PERIPHERAL_CLOCK_CAN_ENABLE();
         PERIPHERAL_CLOCK_CKS_ENABLE();
-        PERIPHERAL_CLOCK_PEC_ENABLE();
 
         GLB_Set_UART_CLK(ENABLE, HBN_UART_CLK_XCLK, 0);
 
@@ -156,7 +156,6 @@ static void __attribute__((unused)) peripheral_clock_init(void)
         GLB_Set_CAM_REF_CLK(ENABLE, GLB_CAM_REF_CLK_WIFIPLL_96M, 3);
         GLB_Set_CAM_CLK(ENABLE, GLB_CAM_CLK_BCLK, 0);
         GLB_Set_Display_CLK(ENABLE, GLB_DP_CLK_WIFIPLL_96M, 3);
-        GLB_Set_PEC_CLK(ENABLE, GLB_PEC_CLK_MUXPLL_160M, 0);
         GLB_Set_Audio_AUTO_CLK(DISABLE);
         // GLB_Set_Audio_ADC_CLK(ENABLE, 2);
 #if defined(CPU_MODEL_A0)
@@ -214,7 +213,6 @@ static void peripheral_clock_init_lp(void)
     tmpVal = 0;
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S2_WIFI, 1);         // ungate wifi
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_EMI_MISC, 1); // ungate emi_misc
-    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_PIO, 1);      // ungate pec
 
     // tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_DMA2, 1); // ungate dma2
     // tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_EMAC, 1); // ungate emac
@@ -234,6 +232,9 @@ static void peripheral_clock_init_lp(void)
     GLB_Set_UART_CLK(ENABLE, HBN_UART_CLK_XCLK, 0);
 
 #ifdef CONFIG_BSP_USB
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_CGEN_CFG1);
+    tmpVal = BL_SET_REG_BIT(tmpVal, GLB_CGEN_S1_RSVD13);
+    BL_WR_REG(GLB_BASE, GLB_CGEN_CFG1, tmpVal);
     PERIPHERAL_CLOCK_USB_ENABLE();
 #endif
 
@@ -353,12 +354,58 @@ void bl_show_component_version(void)
     }
 }
 
+void bflb_show_trim_info(void)
+{
+    struct bflb_device_s *efuse_dev;
+    bflb_ef_ctrl_com_trim_t trim;
+    const char *trim_list[] = {
+        "auadc_gain_ext",
+        "auadc_offset",
+        "usb20",
+        "dcdc12_vout",
+        "rc32k",
+        "rcal_iptat",
+        "gpadc2_offset",
+        "psram_trim",
+        "ldo09",
+        "ldo08",
+        "ldo18",
+        "rc32m",
+        "tsen",
+        "gpadc_gain",
+        "gpadc_vref",
+        "gpadc_offset",
+        "gpadc2_gain",
+        "gpadc2_vref",
+        "rcal_icx",
+        "auadc_gain_int"
+    };
+
+    efuse_dev = bflb_device_get_by_name("ef_ctrl");
+    if (NULL == efuse_dev) {
+        printf("efuse device driver not found!\r\n");
+        while (1)
+            ;
+    }
+
+    for (int i = 0; i < sizeof(trim_list) / sizeof(trim_list[0]); i++) {
+        bflb_ef_ctrl_read_common_trim(NULL, (char*)trim_list[i], &trim, 1);
+        if (trim.en) {
+            if (trim.parity == bflb_ef_ctrl_get_trim_parity(trim.value, trim.len)) {
+                printf("trim %s value=%d!\r\n", trim_list[i], trim.value);
+            } else {
+                printf("trim %s parity error!\r\n", trim_list[i]);
+            }
+        } else {
+            printf("trim %s not done!\r\n", trim_list[i]);
+        }
+    }
+}
+
 #if defined(CONFIG_BSP_CONSOLE_USB_CDC)
 /* USB console is initialized after interrupts are restored. */
 #elif defined(CONFIG_CONSOLE_WO)
-
 extern void bflb_wo_set_console(struct bflb_device_s *dev);
-
 static void __attribute__((unused)) console_init()
 {
     struct bflb_device_s *wo;
@@ -407,7 +454,7 @@ static void __attribute__((unused)) console_init()
 
 #endif
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 void board_recovery(void)
 {
 #ifdef CONF_PSRAM_RESTORE
@@ -476,66 +523,6 @@ void np_board_main(void)
     __WFI();
 }
 
-extern uint32_t __start;
-
-void boot_up_np()
-{
-    uint32_t ap_offset;
-#ifndef CONFIG_BOOT_NP_ASYNC
-    /* AP & NP run in the same code */
-    bflb_l1c_dcache_clean_all();
-    ap_offset = bflb_sf_ctrl_get_flash_image_offset(0, 0);
-    bflb_sf_ctrl_set_flash_image_offset(ap_offset, 1, 0);
-#else
-    Tzc_Sec_Set_Master_Group(TZC_SEC_MASTER_NP, 1);
-    /* AP & NP run in the different code */
-    uint32_t boot_addr = ap_offset = bflb_sf_ctrl_get_flash_image_offset(0, 0);
-    extern uint32_t __dualcore_images__;
-    uint32_t image_ap_1Kalign_size = *(uint32_t *)(&__dualcore_images__);
-    boot_addr += image_ap_1Kalign_size;
-    printf("AP image offset: 0x%08x, AP image 1K align size: 0x%08x, NP boot address: 0x%08x\r\n", ap_offset,
-           image_ap_1Kalign_size, boot_addr);
-    bflb_sf_ctrl_set_flash_image_offset(boot_addr, 1, 0);
-#endif
-    GLB_Set_CPU_Reset_Address(GLB_CORE_ID_NP, (uint32_t)&__start);
-    GLB_Release_CPU(GLB_CORE_ID_NP);
-}
-
-static void __attribute__((noinline, unused)) boot_up_lp(uint32_t address)
-{
-    extern uint32_t __multi_bins__;
-    uint32_t mini_code_start = *(uint32_t *)((uint32_t)&__multi_bins__ + 40);
-    uint32_t mini_code_end = *(uint32_t *)((uint32_t)&__multi_bins__ + 44);
-    uint32_t mini_code_len = mini_code_end - mini_code_start;
-
-    printf("mini code start: 0x%08x, end: 0x%08x, len: %d\r\n", mini_code_start, mini_code_end, mini_code_len);
-    Tzc_Sec_Set_Master_Group(TZC_SEC_MASTER_LP, 0);
-
-    if (mini_code_start != 0) {
-        GLB_Release_Mini_Sys();
-#if defined(CPU_MODEL_A0)
-        GLB_Set_MINI_FCLK(ENABLE, GLB_MINI_FCLK_XCLK, 0);
-#else
-        GLB_Set_MINI_FCLK(ENABLE, GLB_MINI_FCLK_RC32M, 0);
-#endif
-        //GLB_Select_LPCPU_Jtag();
-        arch_delay_us(10);
-
-        uint32_t mini_xip_addr = BFLB_FLASH_XIP_BASE + mini_code_start - bflb_sf_ctrl_get_flash_image_offset(0, 0);
-
-        memcpy((void *)address, (void *)mini_xip_addr, mini_code_len);
-        bflb_l1c_dcache_clean_all();
-
-        __asm__ volatile("" : "+r"(address));
-        printf("Copy gmini_sysData to 0x%08x,[1][31:0]=%08x,len=%d\r\n", address,
-               *(volatile uint32_t *)((uintptr_t)address + 4), mini_code_len);
-
-        GLB_Set_CPU_Reset_Address(GLB_CORE_ID_LP, (uint32_t)address);
-
-        GLB_Release_CPU(GLB_CORE_ID_LP);
-    }
-}
-
 #ifdef CONFIG_HIGH_ISR_STACK
 void bflb_wfa_init(void)
 {
@@ -557,7 +544,7 @@ void ram_heap_init(void)
     heap_len = ((size_t)&__HeapLimit - (size_t)&__HeapBase);
     mm_register_heap(MM_HEAP_OCRAM_0, "OCRAM", MM_ALLOCATOR_TLSF, &__HeapBase, heap_len);
 
-#ifdef CONFIG_DUALCORE_DISABLE
+#if !defined(CPU_LP)
     mm_register_heap(MM_HEAP_WRAM_0, "WRAM", MM_ALLOCATOR_TLSF, &_heap_wifi_start, (size_t)&_heap_wifi_size);
 #endif
 
@@ -570,33 +557,14 @@ void ram_heap_init(void)
         while (1) {}
     }
 #endif
-
-    /* psram heap init */
-    heap_len = ((size_t)&__psram_limit - (size_t)&__psram_heap_base);
-#ifndef CONFIG_PSRAM_SKIP_REGISTER_HEAP
-    mm_register_heap(MM_HEAP_PSRAM_0, "PSRAM", MM_ALLOCATOR_TLSF, &__psram_heap_base, heap_len);
 #endif
-
-    /* ram info dump */
-    printf("dynamic memory init success\r\n"
-           "  ocram heap size: %d Kbyte, \r\n"
-           "  psram heap size: %d Kbyte\r\n",
-           ((size_t)&__HeapLimit - (size_t)&__HeapBase) / 1024,
-           ((size_t)&__psram_limit - (size_t)&__psram_heap_base) / 1024);
-
-#else
-    /* check psram data */
-    if (&__psram_data_end__ - &__psram_data_start__ > 0 || &__psram_noinit_end__ - &__psram_noinit_start__ > 0) {
-        puts("psram data already exists, please enable CONFIG_PSRAM\r\n");
-        while (1) {}
-    }
 
     /* ram info dump */
     printf("dynamic memory init success\r\n"
            "  ocram heap size: %d Kbyte \r\n",
            ((size_t)&__HeapLimit - (size_t)&__HeapBase) / 1024);
 #endif
-#endif
+
 }
 
 #if defined(CPU_AP)
@@ -620,7 +588,9 @@ void board_init(void)
     /* system clock */
     system_clock_init();
 
-#ifndef LP_APP
+    bflb_rtc_init(NULL, board_get_rtc_32k_clk_type());
+
+#ifndef CONFIG_LPAPP
     peripheral_clock_init();
 #else
     peripheral_clock_init_lp();
@@ -656,6 +626,10 @@ void board_init(void)
 
     /* ram and heap init (including psram) */
     ram_heap_init();
+#if defined(CONFIG_PSRAM) || defined(CONFIG_PSRAM_XIP)
+    ram_psram_heap_init();
+#endif
+    mm_heap_set_any_alloc_order(any_alloc_order, sizeof(any_alloc_order) / sizeof(any_alloc_order[0]));
 
     /* boot info dump */
 #ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
@@ -663,6 +637,8 @@ void board_init(void)
 #endif
     /* version info dump */
     bl_show_component_version();
+    /* trim info dump */
+    bflb_show_trim_info();
 
 #if defined(CONFIG_ANTI_ROLLBACK) && !defined(CONFIG_BOOT2)
     bflb_check_anti_rollback();
@@ -696,8 +672,7 @@ void board_init(void)
 #ifdef CONFIG_BFLB_MTD
     bflb_mtd_init();
 #endif
-#ifdef CONFIG_DUALCORE_DISABLE
-#else
+#ifdef CONFIG_DUALCORE_NP_ENABLE
     boot_up_np();
 #endif
 #if defined(CPU_MODEL_A0)
@@ -741,6 +716,10 @@ void board_init(void)
 
     /* ram and heap init (including psram) */
     ram_heap_init();
+#if defined(CONFIG_PSRAM) || defined(CONFIG_PSRAM_XIP)
+    ram_psram_heap_init();
+#endif
+    mm_heap_set_any_alloc_order(any_alloc_order, sizeof(any_alloc_order) / sizeof(any_alloc_order[0]));
 
 #ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
     bl_show_log();
@@ -751,6 +730,8 @@ void board_init(void)
     printf("clock gen1:%08x, gen2:%08x\r\n", getreg32(GLB_BASE + GLB_CGEN_CFG1_OFFSET),
            getreg32(GLB_BASE + GLB_CGEN_CFG2_OFFSET));
     log_start();
+
+    bflb_sec_mutex_init();
 
     bflb_irq_restore(flag);
 
@@ -777,6 +758,7 @@ void board_init(void)
 
     /* heap init */
     ram_heap_init();
+    mm_heap_set_any_alloc_order(any_alloc_order, sizeof(any_alloc_order) / sizeof(any_alloc_order[0]));
 
 #ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
     bl_show_log();
@@ -894,7 +876,7 @@ static void mfg_cmd(int argc, char **argv)
 SHELL_CMD_EXPORT_ALIAS(mfg_cmd, mfg, mfg);
 #endif
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 #include "bl_lp.h"
 
 static void test_io_wakeup_status(uint8_t io_num)
@@ -985,7 +967,7 @@ void cmd_io_test(char *buf, int len, int argc, char **argv)
 }
 
 SHELL_CMD_EXPORT_ALIAS(cmd_io_test, io_test, cmd io_test);
-#endif /* LP_APP */
+#endif /* CONFIG_LPAPP */
 
 #endif /* CONFIG_SHELL */
 

@@ -33,6 +33,7 @@
 #define BL_P2P_DEFAULT_PIN "12345670"
 #define BL_P2P_DEFAULT_GO_INTENT 7
 #define BL_P2P_LISTEN_WPS_GO_INTENT 14
+#define BL_P2P_MAX_GO_INTENT 15
 #define BL_P2P_CONFIG_METHODS_DEFAULT \
     (WPS_CONFIG_DISPLAY | WPS_CONFIG_KEYPAD | WPS_CONFIG_PUSHBUTTON)
 #define BL_P2P_GO_DHCP_START 2
@@ -121,6 +122,11 @@ struct bl_p2p_runtime {
 };
 
 static struct bl_p2p_runtime g_bl_p2p_runtime;
+
+/* Runtime-configurable GO intents (see p2p_go_intent shell command). Kept
+ * outside of the runtime struct so they survive bl_p2p_init()/deinit(). */
+static int g_bl_p2p_go_intent = BL_P2P_DEFAULT_GO_INTENT;
+static int g_bl_p2p_listen_wps_go_intent = BL_P2P_LISTEN_WPS_GO_INTENT;
 
 static void bl_p2p_listen_timeout(struct timeout_s *timeout);
 static void bl_p2p_stop_listen_internal(struct bl_p2p_runtime *runtime, bool notify_end);
@@ -263,7 +269,7 @@ static int bl_p2p_listen_wps_authorize(struct bl_p2p_runtime *runtime,
            reason != NULL ? reason : "unknown");
 
     ret = bl_p2p_connect(peer, runtime->listen_wps_mode, pin,
-                         BL_P2P_LISTEN_WPS_GO_INTENT, true);
+                         g_bl_p2p_listen_wps_go_intent, true);
     if (ret < 0) {
         printf("[P2P] listen_wps auth FAIL peer=" MACSTR " ret=%d\r\n",
                MAC2STR(peer), ret);
@@ -568,16 +574,16 @@ static void bl_p2p_apply_default_methods(struct bl_p2p_runtime *runtime)
     }
 
     p2p_set_config_methods(runtime->p2p, BL_P2P_CONFIG_METHODS_DEFAULT);
-    p2p_set_go_intent(runtime->p2p, BL_P2P_DEFAULT_GO_INTENT);
+    p2p_set_go_intent(runtime->p2p, (u8) g_bl_p2p_go_intent);
 }
 
 static void bl_p2p_store_group_ie(wifi_appie_ram_t type, struct wpabuf *ie)
 {
     if (ie != NULL && wpabuf_len(ie) != 0) {
-        bl_wifi_set_appie_ram_internal(0xff, type, wpabuf_head_u8(ie),
+        wl80211_supplicant_set_appie_ram_internal(0xff, type, wpabuf_head_u8(ie),
                                        (uint16_t) wpabuf_len(ie), false);
     } else {
-        bl_wifi_unset_appie_ram_internal(0xff, type, false);
+        wl80211_supplicant_unset_appie_ram_internal(0xff, type, false);
     }
 }
 
@@ -604,7 +610,7 @@ static void bl_p2p_publish_assoc_resp_ie(struct bl_p2p_runtime *runtime,
     struct wpabuf *ie;
 
     if (runtime == NULL || runtime->group == NULL) {
-        bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_ASSOC_RESP,
+        wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_ASSOC_RESP,
                                          false);
         return;
     }
@@ -1073,7 +1079,7 @@ static int bl_p2p_store_scan_ie(struct bl_p2p_runtime *runtime,
     }
 
     p2p_scan_ie(runtime->p2p, ie, dev_id, 0);
-    ret = bl_wifi_set_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_REQ,
+    ret = wl80211_supplicant_set_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_REQ,
                                          wpabuf_head_u8(ie),
                                          (uint16_t) wpabuf_len(ie), true);
     wpabuf_free(ie);
@@ -1305,7 +1311,7 @@ static void bl_p2p_action_tx_tsk(void)
         params.freq = (uint16_t)tx->freq;
         params.wait_rx = false;
         params.fixed_rate = true;
-        params.rate = BL_P2P_RAW_RATE_1MBPS;
+        params.rate = BL_P2P_RAW_RATE_6MBPS;
         params.retry_limit = BL_P2P_ACTION_RAW_RETRY_LIMIT;
         params.status_cb = bl_p2p_action_tx_status;
         params.opaque = tx;
@@ -1622,12 +1628,12 @@ static int bl_p2p_start_listen(void *ctx, unsigned int freq,
     bl_p2p_stop_listen_internal(runtime, false);
 
     if (probe_resp_ie != NULL && wpabuf_len(probe_resp_ie) != 0) {
-        bl_wifi_set_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP,
+        wl80211_supplicant_set_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP,
                                        wpabuf_head_u8(probe_resp_ie),
                                        (uint16_t) wpabuf_len(probe_resp_ie),
                                        true);
     } else {
-        bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
+        wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
     }
 
     /* Cap each ROC at 30s; longer listen-WPS windows are re-armed below. */
@@ -1644,7 +1650,7 @@ static int bl_p2p_start_listen(void *ctx, unsigned int freq,
                                         duration) < 0) {
         wl80211_printf("[P2P] listen ROC start failed freq=%u dur=%u\r\n",
                        freq, duration);
-        bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
+        wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
         return -1;
     }
 
@@ -1669,7 +1675,7 @@ static void bl_p2p_stop_listen_internal(struct bl_p2p_runtime *runtime,
 
     timeout_stop(&runtime->listen_timeout);
     wl80211_cancel_remain_on_channel(WL80211_VIF_STA);
-    bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
+    wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
 
     if (notify_end && !runtime->stop_notified && runtime->p2p != NULL) {
         runtime->stop_notified = 1U;
@@ -1727,6 +1733,7 @@ static int bl_p2p_scan(void *ctx, enum p2p_scan_type type, int freq,
     }
 
     os_memset(&params, 0, sizeof(params));
+    params.flags = WL80211_SCAN_FLAGS_NOCCK;
     switch (type) {
         case P2P_SCAN_SOCIAL:
             channels[channels_cnt++] = 1;
@@ -2447,9 +2454,9 @@ static void bl_p2p_group_remove(struct bl_p2p_runtime *runtime, bool stop_ap)
         return;
     }
 
-    bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_ASSOC_RESP, false);
-    bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_BEACON_GO, false);
-    bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP_GO,
+    wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_ASSOC_RESP, false);
+    wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_BEACON_GO, false);
+    wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP_GO,
                                      false);
 
     if (runtime->group != NULL) {
@@ -2494,6 +2501,45 @@ int bl_p2p_set_device_name(const char *name)
     }
 
     return 0;
+}
+
+int bl_p2p_set_go_intent(int go_intent, int listen_wps_go_intent)
+{
+    struct bl_p2p_runtime *runtime = &g_bl_p2p_runtime;
+
+    if (go_intent > BL_P2P_MAX_GO_INTENT ||
+        listen_wps_go_intent > BL_P2P_MAX_GO_INTENT) {
+        return -1;
+    }
+
+    /* A negative value keeps the current setting for that entry. */
+    if (go_intent >= 0) {
+        g_bl_p2p_go_intent = go_intent;
+    }
+    if (listen_wps_go_intent >= 0) {
+        g_bl_p2p_listen_wps_go_intent = listen_wps_go_intent;
+    }
+
+    /* Push the value matching the current role to the live p2p instance so
+     * the new setting takes effect without a re-init. */
+    if (runtime->p2p != NULL) {
+        p2p_set_go_intent(runtime->p2p,
+                          (u8) (runtime->listen_wps_armed ?
+                                    g_bl_p2p_listen_wps_go_intent :
+                                    g_bl_p2p_go_intent));
+    }
+
+    return 0;
+}
+
+void bl_p2p_get_go_intent(int *go_intent, int *listen_wps_go_intent)
+{
+    if (go_intent != NULL) {
+        *go_intent = g_bl_p2p_go_intent;
+    }
+    if (listen_wps_go_intent != NULL) {
+        *listen_wps_go_intent = g_bl_p2p_listen_wps_go_intent;
+    }
 }
 
 bool bl_p2p_is_ready(void)
@@ -2597,6 +2643,8 @@ int bl_p2p_init(void)
         return -4;
     }
 
+    bl_p2p_apply_default_methods(runtime);
+
     if (bl_p2p_glue_register_mgmt_rx(bl_p2p_mgmt_rx, runtime) < 0) {
         p2p_deinit(runtime->p2p);
         bl_p2p_reset_runtime(runtime);
@@ -2615,7 +2663,7 @@ int bl_p2p_init(void)
             .notify_ap_assoc = bl_p2p_notify_ap_assoc,
             .notify_ap_disassoc = bl_p2p_notify_ap_disassoc,
         };
-        bl_wifi_register_p2p_cb_internal(&p2p_cb);
+        wl80211_supplicant_register_p2p_cb_internal(&p2p_cb);
     }
 
     wl80211_p2p_mark_device_ready(false);
@@ -2632,12 +2680,12 @@ void bl_p2p_deinit(void)
         return;
     }
 
-    bl_wifi_unregister_p2p_cb_internal();
+    wl80211_supplicant_unregister_p2p_cb_internal();
     bl_p2p_stop();
     async_unregister_event_filter(EV_WL80211, bl_p2p_event_handler, runtime);
     bl_p2p_glue_unregister_mgmt_rx();
-    bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_REQ, true);
-    bl_wifi_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
+    wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_REQ, true);
+    wl80211_supplicant_unset_appie_ram_internal(0xff, WIFI_APPIE_P2P_PROBE_RESP, true);
     p2p_deinit(runtime->p2p);
     wl80211_p2p_mark_group_removed();
     bl_p2p_reset_runtime(runtime);
@@ -2747,7 +2795,7 @@ int bl_p2p_listen_wps_start(enum bl_p2p_wps_mode mode, uint8_t channel,
     bl_p2p_set_runtime_channel(runtime, channel);
     p2p_set_config_methods(runtime->p2p,
                            bl_p2p_listen_wps_config_methods(mode));
-    p2p_set_go_intent(runtime->p2p, BL_P2P_LISTEN_WPS_GO_INTENT);
+    p2p_set_go_intent(runtime->p2p, (u8) g_bl_p2p_listen_wps_go_intent);
     /* Maximize listen-state duty cycle so peers have a high chance to catch
      * our probe response. Values are in units of 100 TU
      * (1 TU = 1024 us). 10..20 -> ~1024..2048 ms per listen window. */
@@ -2837,8 +2885,10 @@ int bl_p2p_connect(const uint8_t peer_addr[6], enum bl_p2p_wps_mode mode,
         return -1;
     }
 
-    if (go_intent < 1 || go_intent > 15) {
-        go_intent = 7;
+    /* 0 is a valid GO intent (always become client), so only reject values
+     * outside of the 0..15 range defined by the P2P spec. */
+    if (go_intent < 0 || go_intent > BL_P2P_MAX_GO_INTENT) {
+        go_intent = g_bl_p2p_go_intent;
     }
 
     if (platform_get_mac(WL80211_VIF_STA, ifaddr) < 0) {

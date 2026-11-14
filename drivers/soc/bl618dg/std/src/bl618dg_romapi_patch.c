@@ -54,6 +54,217 @@
 #define EFUSE_TRIM_XTAL_OFFSET       0x1F8
 #endif
 
+const GLB_CPUPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION cpupllBasicCfg_24M_26M = {
+    .refdivRatio = 2,  /*!< refclk divide ratio, Fref=Fxtal/cpupll_refclk_div_ratio */
+    .vcoSpeed = 4,     /*!< 4:450M~550MHz */
+    .vcoIdacExtra = 0, /*!< cpupll_resv0 */
+    .dtcRSel = 3,      /*!< dtc resolution select, 0: 52p~91p, 1:65p~113p, 2:74p~129p, 3: 102p~180p */
+    .lfAlphaBase = 1,  /*!< change the alpha by 2^alpha_base_sel, could be 0, 1 */
+    .lfAlphaExp = 2,   /*!< change the alpha by 2^(2*alpha_exp_sel),could be 0, 1, 2, 3, 4, 5 */
+    .lfAlphaFast = 3,  /*!< in fast lock state, alpha can be enlarge by 2^(alpha_fast_sel), could be 0, 1, 2, 3 */
+    .lfBetaBase = 0,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+    .lfBetaExp = 2,    /*!< change the beta by 2^beta_exp_sel, could be 0, 1, 2, 3, 4, 5 */
+    .lfBetaFast = 1,   /*!< in fast lock state, could be 0, 1, enlarge beta by 2^beta_exp_sel */
+    .spdGain = 2,      /*!< 0,1,2,3 for 2/2^6, 3/2^6, 4/2^6, 5/2^6, it is the TDC gain */
+    .lmsExtEn = 0,     /*!< 1'b1 enable external lms coe, and disable lms block */
+    .lmsExtValue = 35, /*!< tt50 = 0.68 */
+};
+
+const GLB_CPUPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION cpupll320MCfg_24M_26M = {
+    .refdivRatio = 2,  /*!< refclk divide ratio, Fref=Fxtal/cpupll_refclk_div_ratio */
+    .vcoSpeed = 1,     /*!< 1:320MHz */
+    .vcoIdacExtra = 0, /*!< cpupll_resv0 */
+    .dtcRSel = 3,      /*!< dtc resolution select, 0: 52p~91p, 1:65p~113p, 2:74p~129p, 3: 102p~180p */
+    .lfAlphaBase = 1,  /*!< change the alpha by 2^alpha_base_sel, could be 0, 1 */
+    .lfAlphaExp = 2,   /*!< change the alpha by 2^(2*alpha_exp_sel),could be 0, 1, 2, 3, 4, 5 */
+    .lfAlphaFast = 3,  /*!< in fast lock state, alpha can be enlarge by 2^(alpha_fast_sel), could be 0, 1, 2, 3 */
+    .lfBetaBase = 0,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+    .lfBetaExp = 2,    /*!< change the beta by 2^beta_exp_sel, could be 0, 1, 2, 3, 4, 5 */
+    .lfBetaFast = 1,   /*!< in fast lock state, could be 0, 1, enlarge beta by 2^beta_exp_sel */
+    .spdGain = 2,      /*!< 0,1,2,3 for 2/2^6, 3/2^6, 4/2^6, 5/2^6, it is the TDC gain */
+    .lmsExtEn = 0,     /*!< 1'b1 enable external lms coe, and disable lms block */
+    .lmsExtValue = 35, /*!< tt50 = 0.68 */
+};
+
+const GLB_CPUPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION cpupll640MCfg_24M_26M = {
+    .refdivRatio = 2,  /*!< refclk divide ratio, Fref=Fxtal/cpupll_refclk_div_ratio */
+    .vcoSpeed = 7,     /*!< 1:640MHz */
+    .vcoIdacExtra = 2, /*!< cpupll_resv0 */
+    .dtcRSel = 1,      /*!< dtc resolution select, 0: 52p~91p, 1:65p~113p, 2:74p~129p, 3: 102p~180p */
+    .lfAlphaBase = 0,  /*!< change the alpha by 2^alpha_base_sel, could be 0, 1 */
+    .lfAlphaExp = 3,   /*!< change the alpha by 2^(2*alpha_exp_sel),could be 0, 1, 2, 3, 4, 5 */
+    .lfAlphaFast = 3,  /*!< in fast lock state, alpha can be enlarge by 2^(alpha_fast_sel), could be 0, 1, 2, 3 */
+    .lfBetaBase = 3,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+    .lfBetaExp = 2,    /*!< change the beta by 2^beta_exp_sel, could be 0, 1, 2, 3, 4, 5 */
+    .lfBetaFast = 1,   /*!< in fast lock state, could be 0, 1, enlarge beta by 2^beta_exp_sel */
+    .spdGain = 2,      /*!< 0,1,2,3 for 2/2^6, 3/2^6, 4/2^6, 5/2^6, it is the TDC gain */
+    .lmsExtEn = 0,     /*!< 1'b1 enable external lms coe, and disable lms block */
+    .lmsExtValue = 40, /*!< tt50 = 0.68 */
+};
+
+const GLB_CPUPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION cpupllBasicCfg_32M_40M_52M = {
+    .refdivRatio = 4,  /*!< refclk divide ratio, Fref=Fxtal/cpupll_refclk_div_ratio */
+    .vcoSpeed = 4,     /*!< 4:450M~550MHz */
+    .vcoIdacExtra = 0, /*!< cpupll_resv0 */
+    .dtcRSel = 3,      /*!< dtc resolution select, 0: 52p~91p, 1:65p~113p, 2:74p~129p, 3: 102p~180p */
+    .lfAlphaBase = 1,  /*!< change the alpha by 2^alpha_base_sel, could be 0, 1 */
+    .lfAlphaExp = 2,   /*!< change the alpha by 2^(2*alpha_exp_sel),could be 0, 1, 2, 3, 4, 5 */
+    .lfAlphaFast = 3,  /*!< in fast lock state, alpha can be enlarge by 2^(alpha_fast_sel), could be 0, 1, 2, 3 */
+#if defined(CPU_MODEL_A0)
+    .lfBetaBase = 0,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+#else
+    .lfBetaBase = 3,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+#endif
+    .lfBetaExp = 2,    /*!< change the beta by 2^beta_exp_sel, could be 0, 1, 2, 3, 4, 5 */
+    .lfBetaFast = 1,   /*!< in fast lock state, could be 0, 1, enlarge beta by 2^beta_exp_sel */
+    .spdGain = 2,      /*!< 0,1,2,3 for 2/2^6, 3/2^6, 4/2^6, 5/2^6, it is the TDC gain */
+    .lmsExtEn = 0,     /*!< 1'b1 enable external lms coe, and disable lms block */
+    .lmsExtValue = 35, /*!< tt50 = 0.68 */
+#if !defined(CPU_MODEL_A0)
+    .momUpdatePeriod = 3,
+    .coarseGain = 3,
+    .resv0_5_4 = 1,
+#endif
+};
+
+const GLB_CPUPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION cpupll320MCfg_32M_40M_52M = {
+    .refdivRatio = 4,  /*!< refclk divide ratio, Fref=Fxtal/cpupll_refclk_div_ratio */
+    .vcoSpeed = 1,     /*!< 1:320MHz */
+    .vcoIdacExtra = 0, /*!< cpupll_resv0 */
+    .dtcRSel = 3,      /*!< dtc resolution select, 0: 52p~91p, 1:65p~113p, 2:74p~129p, 3: 102p~180p */
+    .lfAlphaBase = 1,  /*!< change the alpha by 2^alpha_base_sel, could be 0, 1 */
+    .lfAlphaExp = 2,   /*!< change the alpha by 2^(2*alpha_exp_sel),could be 0, 1, 2, 3, 4, 5 */
+    .lfAlphaFast = 3,  /*!< in fast lock state, alpha can be enlarge by 2^(alpha_fast_sel), could be 0, 1, 2, 3 */
+#if defined(CPU_MODEL_A0)
+    .lfBetaBase = 0,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+#else
+    .lfBetaBase = 3,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+#endif
+    .lfBetaExp = 2,    /*!< change the beta by 2^beta_exp_sel, could be 0, 1, 2, 3, 4, 5 */
+    .lfBetaFast = 1,   /*!< in fast lock state, could be 0, 1, enlarge beta by 2^beta_exp_sel */
+    .spdGain = 2,      /*!< 0,1,2,3 for 2/2^6, 3/2^6, 4/2^6, 5/2^6, it is the TDC gain */
+    .lmsExtEn = 0,     /*!< 1'b1 enable external lms coe, and disable lms block */
+    .lmsExtValue = 35, /*!< tt50 = 0.68 */
+#if !defined(CPU_MODEL_A0)
+    .momUpdatePeriod = 3,
+    .coarseGain = 3,
+    .resv0_5_4 = 1,
+#endif
+};
+
+const GLB_CPUPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION cpupll640MCfg_32M_40M_52M = {
+    .refdivRatio = 4,  /*!< refclk divide ratio, Fref=Fxtal/cpupll_refclk_div_ratio */
+    .vcoSpeed = 7,     /*!< 1:640MHz */
+#if defined(CPU_MODEL_A0)
+    .vcoIdacExtra = 2, /*!< cpupll_resv0 */
+#else
+    .vcoIdacExtra = 0, /*!< cpupll_resv0 */
+#endif
+    .dtcRSel = 1,      /*!< dtc resolution select, 0: 52p~91p, 1:65p~113p, 2:74p~129p, 3: 102p~180p */
+    .lfAlphaBase = 0,  /*!< change the alpha by 2^alpha_base_sel, could be 0, 1 */
+    .lfAlphaExp = 3,   /*!< change the alpha by 2^(2*alpha_exp_sel),could be 0, 1, 2, 3, 4, 5 */
+    .lfAlphaFast = 3,  /*!< in fast lock state, alpha can be enlarge by 2^(alpha_fast_sel), could be 0, 1, 2, 3 */
+    .lfBetaBase = 3,   /*!< could be 0.5, 0.625, 0.75, 0.875 */
+    .lfBetaExp = 2,    /*!< change the beta by 2^beta_exp_sel, could be 0, 1, 2, 3, 4, 5 */
+    .lfBetaFast = 1,   /*!< in fast lock state, could be 0, 1, enlarge beta by 2^beta_exp_sel */
+    .spdGain = 2,      /*!< 0,1,2,3 for 2/2^6, 3/2^6, 4/2^6, 5/2^6, it is the TDC gain */
+    .lmsExtEn = 0,     /*!< 1'b1 enable external lms coe, and disable lms block */
+    .lmsExtValue = 40, /*!< tt50 = 0.68 */
+#if !defined(CPU_MODEL_A0)
+    .momUpdatePeriod = 3,
+    .coarseGain = 3,
+    .resv0_5_4 = 1,
+#endif
+};
+
+const GLB_CPUPLL_Cfg_Type ATTR_CLOCK_CONST_SECTION cpupllCfg_638p976M[GLB_XTAL_MAX] = {
+    { NULL, 0x0 },                           /*!< XTAL is None */
+    { &cpupll640MCfg_24M_26M, 0x1A9FB },     /*!< XTAL is 24M */
+    { &cpupll640MCfg_32M_40M_52M, 0x27EF9 }, /*!< XTAL is 32M */
+    { &cpupll640MCfg_32M_40M_52M, 0x18937 }, /*!< XTAL is 52M */
+    { &cpupll640MCfg_32M_40M_52M, 0x1FF2E }, /*!< XTAL is 40M */
+    { &cpupll640MCfg_24M_26M, 0x18937 },     /*!< XTAL is 26M */
+    { &cpupll640MCfg_32M_40M_52M, 0x27EF9 }, /*!< XTAL is RC32M */
+};
+
+const GLB_CPUPLL_Cfg_Type ATTR_CLOCK_CONST_SECTION cpupllCfg_640M[GLB_XTAL_MAX] = {
+    { NULL, 0x0 },                           /*!< XTAL is None */
+    { &cpupll640MCfg_24M_26M, 0x1AAAA },     /*!< XTAL is 24M */
+    { &cpupll640MCfg_32M_40M_52M, 0x28000 }, /*!< XTAL is 32M */
+    { &cpupll640MCfg_32M_40M_52M, 0x189D8 }, /*!< XTAL is 52M */
+    { &cpupll640MCfg_32M_40M_52M, 0x20000 }, /*!< XTAL is 40M */
+    { &cpupll640MCfg_24M_26M, 0x189D8 },     /*!< XTAL is 26M */
+    { &cpupll640MCfg_32M_40M_52M, 0x28000 }, /*!< XTAL is RC32M */
+};
+
+const GLB_CPUPLL_Cfg_Type ATTR_CLOCK_CONST_SECTION cpupllCfg_480M[GLB_XTAL_MAX] = {
+    { NULL, 0x0 },                            /*!< XTAL is None */
+    { &cpupllBasicCfg_24M_26M, 0x14000 },     /*!< XTAL is 24M */
+    { &cpupllBasicCfg_32M_40M_52M, 0x1E000 }, /*!< XTAL is 32M */
+    { &cpupllBasicCfg_32M_40M_52M, 0x12762 }, /*!< XTAL is 52M */
+    { &cpupllBasicCfg_32M_40M_52M, 0x18000 }, /*!< XTAL is 40M */
+    { &cpupllBasicCfg_24M_26M, 0x12762 },     /*!< XTAL is 26M */
+    { &cpupllBasicCfg_32M_40M_52M, 0x1E000 }, /*!< XTAL is RC32M */
+};
+
+const GLB_CPUPLL_Cfg_Type ATTR_CLOCK_CONST_SECTION cpupllCfg_320M[GLB_XTAL_MAX] = {
+    { NULL, 0x0 },                           /*!< XTAL is None */
+    { &cpupll320MCfg_24M_26M, 0xD555 },      /*!< XTAL is 24M */
+    { &cpupll320MCfg_32M_40M_52M, 0x14000 }, /*!< XTAL is 32M */
+    { &cpupll320MCfg_32M_40M_52M, 0xC4EC },  /*!< XTAL is 52M */
+    { &cpupll320MCfg_32M_40M_52M, 0x10000 }, /*!< XTAL is 40M */
+    { &cpupll320MCfg_24M_26M, 0xC4EC },      /*!< XTAL is 26M */
+    { &cpupll320MCfg_32M_40M_52M, 0x14000 }, /*!< XTAL is RC32M */
+};
+
+const GLB_DSIPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION dsipll1400MCfg_32M_40M_52M = {
+    .refdiv_ratio   = 2,  /* XTAL pre-div so that PFD stays in valid range */
+    .vco_speed      = 6,  /* VCO range index (device-specific table) */
+    .vco_idac_extra = 2,  /* Extra bias current trim for VCO */
+    .tdc_dly_sel    = 0,  /* TDC delay chain select */
+    .dtc_r_sel      = 0,  /* DTC resolution window select */
+    .lf_alpha_base  = 1,  /* Loop filter alpha base (integral weight coarse) */
+    .lf_alpha_exp   = 2,  /* Alpha exponent scaling (bandwidth control) */
+    .lf_alpha_fast  = 1,  /* Fast-lock extra alpha gain */
+    .lf_beta_base   = 0,  /* Beta base (proportional weight) */
+    .lf_beta_exp    = 3,  /* Beta exponent scaling */
+    .lf_beta_fast   = 0,  /* Fast-lock beta boost enable */
+    .spd_gain       = 2,  /* TDC speed gain index */
+    .lms_ext_en     = 0,  /* Use internal LMS (0) */
+    .lms_ext_value  = 32, /* External LMS coefficient (ignored if lms_ext_en=0) */
+    .bitclk_div     = 2,  /* Output bit clock divider */
+    .resv0_1_0      = 1,
+};
+
+const GLB_DSIPLL_CFG_BASIC_Type ATTR_CLOCK_CONST_SECTION dsipll1400MCfg_24M_26M = {
+    .refdiv_ratio   = 2,  /* XTAL pre-div for lower input XTAL to reach same PFD */
+    .vco_speed      = 6,  /* Same VCO range as high XTAL set */
+    .vco_idac_extra = 2,  /* Extra bias current trim */
+    .tdc_dly_sel    = 0,  /* TDC delay chain select */
+    .dtc_r_sel      = 0,  /* DTC resolution window select */
+    .lf_alpha_base  = 0,  /* Loop filter alpha base */
+    .lf_alpha_exp   = 2,  /* Alpha exponent scaling */
+    .lf_alpha_fast  = 3,  /* Fast-lock alpha gain */
+    .lf_beta_base   = 3,  /* Beta base */
+    .lf_beta_exp    = 1,  /* Beta exponent scaling */
+    .lf_beta_fast   = 1,  /* Fast-lock beta enable */
+    .spd_gain       = 0,  /* TDC speed gain index */
+    .lms_ext_en     = 0,  /* Internal LMS */
+    .lms_ext_value  = 32, /* External LMS coefficient placeholder */
+    .bitclk_div     = 2,  /* Output bit clock divider */
+    .resv0_1_0      = 1,
+};
+
+const GLB_DSIPLL_Cfg_Type ATTR_CLOCK_CONST_SECTION dsipllCfg_1400M[GLB_XTAL_MAX] = {
+    { NULL, 0x0 },                            /*!< XTAL is None */
+    { &dsipll1400MCfg_24M_26M, 0x3A555 },     /*!< XTAL is 24M */
+    { &dsipll1400MCfg_32M_40M_52M, 0x57800 }, /*!< XTAL is 32M */
+    { &dsipll1400MCfg_32M_40M_52M, 0x1AEC4 }, /*!< XTAL is 52M */
+    { &dsipll1400MCfg_32M_40M_52M, 0x23000 }, /*!< XTAL is 40M */
+    { &dsipll1400MCfg_24M_26M, 0x35D89 },     /*!< XTAL is 26M */
+    { &dsipll1400MCfg_32M_40M_52M, 0x57800 }, /*!< XTAL is RC32M */
+};
+
 static void PSram_Ctrl_Request(PSRAM_ID_Type PSRAM_ID)
 {
     uint32_t tmpVal = 0;
@@ -987,7 +1198,7 @@ uint32_t bflb_efuse_get_adc_tsen_trim(void)
         }
     }
 
-    return 2300;
+    return 2480;
 }
 
 /****************************************************************************/ /**
@@ -1105,6 +1316,395 @@ void Tzc_Sec_Set_CPU_Group(uint8_t cpu, uint8_t group)
     BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID_LOCK, tmpVal2);
 }
 
+void ATTR_TCM_SECTION Tzc_Sec_Set_Master_DMA_Group(uint8_t dmaType, uint32_t channelBitmap)
+{
+    uint32_t tmpVal;
+    uint32_t tmpVal2;
+
+    if (dmaType == TZC_SEC_MASTER_TYPE_DMA0 || dmaType == TZC_SEC_MASTER_TYPE_DMA1) {
+        channelBitmap &= 0xff;
+    } else if (dmaType == TZC_SEC_MASTER_TYPE_DMA2) {
+        channelBitmap &= 0xf;
+    } else if (dmaType == TZC_SEC_MASTER_TYPE_2DDMA) {
+        channelBitmap &= 0x3;
+    } else {
+        return;
+    }
+
+    if (dmaType == TZC_SEC_MASTER_TYPE_DMA0) {
+        tmpVal = BL_RD_REG(TZ1_BASE, TZC_SEC_TZC_DMA_TZMID);
+        tmpVal2 = BL_RD_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID_LOCK);
+
+        tmpVal &= TZC_SEC_TZC_DMA_TZMID_UMSK;
+        tmpVal |= (channelBitmap << TZC_SEC_TZC_DMA_TZMID_POS);
+        tmpVal |= (0xff << TZC_SEC_TZC_DMA_TZMID_SEL_POS);
+        tmpVal2 |= (1 << TZC_SEC_TZC_DMA_TZMID_LOCK_POS);
+
+        BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_DMA_TZMID, tmpVal);
+        BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID_LOCK, tmpVal2);
+    } else if (dmaType == TZC_SEC_MASTER_TYPE_DMA1) {
+        tmpVal = BL_RD_REG(TZ1_BASE, TZC_SEC_TZC_MM_BMX_TZMID);
+        tmpVal2 = BL_RD_REG(TZ1_BASE, TZC_SEC_TZC_MM_BMX_TZMID_LOCK);
+
+        tmpVal &= TZC_SEC_TZC_XDMA_TZMID_UMSK;
+        tmpVal |= (channelBitmap << TZC_SEC_TZC_XDMA_TZMID_POS);
+        tmpVal |= (0xff << TZC_SEC_TZC_XDMA_TZMID_SEL_POS);
+        tmpVal2 |= (1 << TZC_SEC_TZC_XDMA_TZMID_LOCK_POS);
+
+        BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_MM_BMX_TZMID, tmpVal);
+        BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_MM_BMX_TZMID_LOCK, tmpVal2);
+    } else if (dmaType == TZC_SEC_MASTER_TYPE_DMA2) {
+        tmpVal = BL_RD_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID);
+        tmpVal2 = BL_RD_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID_LOCK);
+
+        tmpVal &= TZC_SEC_TZC_DMA2_TZMID_UMSK;
+        tmpVal |= (channelBitmap << TZC_SEC_TZC_DMA2_TZMID_POS);
+        tmpVal |= (0xf << TZC_SEC_TZC_DMA2_TZMID_SEL_POS);
+        tmpVal2 |= (1 << TZC_SEC_TZC_DMA2_TZMID_LOCK_POS);
+
+        BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID, tmpVal);
+        BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID_LOCK, tmpVal2);
+    } else {
+        tmpVal = BL_RD_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID_LOCK);
+
+        tmpVal &= TZC_SEC_TZC_2DDMA_TZMID_UMSK;
+        tmpVal |= (channelBitmap << TZC_SEC_TZC_2DDMA_TZMID_POS);
+        tmpVal |= (0x3 << TZC_SEC_TZC_2DDMA_TZMID_SEL_POS);
+        tmpVal |= (1 << TZC_SEC_TZC_2DDMA_TZMID_LOCK_POS);
+
+        BL_WR_REG(TZ1_BASE, TZC_SEC_TZC_BMX_TZMID_LOCK, tmpVal);
+    }
+}
+
+/* The ROM expands a group index; these SDK APIs write the access mask directly. */
+static void ATTR_TCM_SECTION tzc_sec_regionx_access_set(uint32_t ctrlOffset, uint8_t idEnPos,
+                                                        uint8_t enablePos, uint8_t lockPos, uint8_t accessMask)
+{
+    uint32_t tmpVal;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(accessMask));
+    if (!IS_TZC_SEC_GROUP_TYPE(accessMask)) {
+        return;
+    }
+
+    tmpVal = BL_RD_WORD(TZC_SEC_BASE + ctrlOffset);
+    tmpVal &= ~(TZC_SEC_ACCESS_MASK << idEnPos);
+    tmpVal |= (uint32_t)accessMask << idEnPos;
+    BL_WR_WORD(TZC_SEC_BASE + ctrlOffset, tmpVal);
+
+    tmpVal = BL_RD_WORD(TZC_SEC_BASE + ctrlOffset);
+    tmpVal |= 1U << enablePos;
+    tmpVal |= 1U << lockPos;
+    BL_WR_WORD(TZC_SEC_BASE + ctrlOffset, tmpVal);
+}
+
+void ATTR_TCM_SECTION Tzc_Sec_OCRAM_Access_Set_Regionx(uint8_t group)
+{
+    tzc_sec_regionx_access_set(TZC_SEC_TZC_OCRAM_TZSRG_CTRL_OFFSET,
+                               TZC_SEC_TZC_OCRAM_TZSRG_RX_ID_EN_POS,
+                               TZC_SEC_TZC_OCRAM_TZSRG_RX_EN_POS,
+                               TZC_SEC_TZC_OCRAM_TZSRG_RX_LOCK_POS, group);
+}
+
+void ATTR_TCM_SECTION Tzc_Sec_TCM_Access_Set_Regionx(uint8_t group)
+{
+    tzc_sec_regionx_access_set(TZC_SEC_TZC_TCM_TZSRG_CTRL_OFFSET,
+                               TZC_SEC_TZC_TCM_TZSRG_RX_ID_EN_POS,
+                               TZC_SEC_TZC_TCM_TZSRG_RX_EN_POS,
+                               TZC_SEC_TZC_TCM_TZSRG_RX_LOCK_POS, group);
+}
+
+void ATTR_TCM_SECTION Tzc_Sec_WRAM_Access_Set_Regionx(uint8_t group)
+{
+    tzc_sec_regionx_access_set(TZC_SEC_TZC_W2RAM_TZSRG_CTRL_OFFSET,
+                               TZC_SEC_TZC_W2RAM_TZSRG_RX_ID_EN_POS,
+                               TZC_SEC_TZC_W2RAM_TZSRG_RX_EN_POS,
+                               TZC_SEC_TZC_W2RAM_TZSRG_RX_LOCK_POS, group);
+}
+
+void ATTR_TCM_SECTION Tzc_Sec_XRAM_Access_Set_Regionx(uint8_t group)
+{
+    tzc_sec_regionx_access_set(TZC_SEC_TZC_XRAM_TZSRG_CTRL_OFFSET,
+                               TZC_SEC_TZC_XRAM_TZSRG_RX_ID_EN_POS,
+                               TZC_SEC_TZC_XRAM_TZSRG_RX_EN_POS,
+                               TZC_SEC_TZC_XRAM_TZSRG_RX_LOCK_POS, group);
+}
+
+void ATTR_TCM_SECTION Tzc_Sec_Mini_Ram_Access_Set_Regionx(uint8_t group)
+{
+    tzc_sec_regionx_access_set(TZC_SEC_TZC_MINI_RAM_TZSRG_CTRL_OFFSET,
+                               TZC_SEC_TZC_MINI_RAM_TZSRG_RX_ID_EN_POS,
+                               TZC_SEC_TZC_MINI_RAM_TZSRG_RX_EN_POS,
+                               TZC_SEC_TZC_MINI_RAM_TZSRG_RX_LOCK_POS, group);
+}
+
+void ATTR_TCM_SECTION Tzc_Sec_Flash_Access_Set_Regionx(uint8_t group)
+{
+    tzc_sec_regionx_access_set(TZC_SEC_TZC_SF_TZSRG_CTRL_OFFSET,
+                               TZC_SEC_TZC_SF_TZSRG_RX_ID_EN_POS,
+                               TZC_SEC_TZC_SF_TZSRG_RX_EN_POS,
+                               TZC_SEC_TZC_SF_TZSRG_RX_LOCK_POS, group);
+}
+
+/****************************************************************************/ /**
+ * @brief  TrustZone Security set ROM region access configuration
+ *
+ * @param  region: ROM region index 0-2
+ * @param  startAddr: ROM region start address
+ * @param  length: ROM region end length
+ * @param  group: ROM region auth group type
+ *
+ * @return None
+ *
+*******************************************************************************/
+void ATTR_TCM_SECTION Tzc_Sec_ROM_Access_Set_Advance(uint8_t region, uint32_t startAddr, uint32_t length, uint8_t group)
+{
+    uint32_t tmpVal = 0;
+    uint32_t alignEnd = (startAddr + length + 1023) & ~0x3FF;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(group));
+    if (region >= 3) {
+        return;
+    }
+    group &= 0xf;
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_ROM_TZSRG_CTRL);
+    tmpVal &= (~(0xf << (region * 4)));
+    tmpVal |= (group << (region * 4));
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_ROM_TZSRG_CTRL, tmpVal);
+
+    tmpVal = (((alignEnd >> 10) - 1) & 0x3ff) | (((startAddr >> 10) & 0x3ff) << 16);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_ROM_TZSRG_R0_OFFSET + region * 4, tmpVal);
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_ROM_TZSRG_CTRL);
+    tmpVal |= 1 << (region + 16);
+    tmpVal |= 1 << (region + 24);
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_ROM_TZSRG_CTRL, tmpVal);
+}
+
+/****************************************************************************/ /**
+ * @brief  TrustZone Security set OCRAM region access configuration
+ *
+ * @param  region: OCRAM region index 0-2
+ * @param  startAddr: OCRAM region start address
+ * @param  length: OCRAM region end length
+ * @param  group: OCRAM region auth group type
+ *
+ * @return None
+ *
+*******************************************************************************/
+void ATTR_TCM_SECTION Tzc_Sec_OCRAM_Access_Set_Advance(uint8_t region, uint32_t startAddr, uint32_t length, uint8_t group)
+{
+    uint32_t tmpVal = 0;
+    uint32_t alignEnd = (startAddr + length + 1023) & ~0x3FF;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(group));
+    if (region >= 3) {
+        return;
+    }
+    group &= 0xf;
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_OCRAM_TZSRG_CTRL);
+    tmpVal &= (~(0xf << (region * 4)));
+    tmpVal |= (group << (region * 4));
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_OCRAM_TZSRG_CTRL, tmpVal);
+
+    tmpVal = (((alignEnd >> 10) - 1) & 0x3ff) | (((startAddr >> 10) & 0x3ff) << 16);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_OCRAM_TZSRG_R0_OFFSET + region * 4, tmpVal);
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_OCRAM_TZSRG_CTRL);
+    tmpVal |= 1 << (region + 16);
+    tmpVal |= 1 << (region + 20);
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_OCRAM_TZSRG_CTRL, tmpVal);
+}
+
+/****************************************************************************/ /**
+ * @brief  TrustZone Security set TCM region access configuration
+ *
+ * @param  region: TCM region index 0-2
+ * @param  startAddr: TCM region start address
+ * @param  length: TCM region end length
+ * @param  group: TCM region auth group type
+ *
+ * @return None
+ *
+*******************************************************************************/
+void ATTR_TCM_SECTION Tzc_Sec_TCM_Access_Set_Advance(uint8_t region, uint32_t startAddr, uint32_t length, uint8_t group)
+{
+    uint32_t tmpVal = 0;
+    uint32_t alignEnd = (startAddr + length + 1023) & ~0x3FF;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(group));
+    if (region >= 3) {
+        return;
+    }
+    group &= 0xf;
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_TCM_TZSRG_CTRL);
+    tmpVal &= (~(0xf << (region * 4)));
+    tmpVal |= (group << (region * 4));
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_TCM_TZSRG_CTRL, tmpVal);
+
+    tmpVal = (((alignEnd >> 10) - 1) & 0x3ff) | (((startAddr >> 10) & 0x3ff) << 16);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_TCM_TZSRG_R0_OFFSET + region * 4, tmpVal);
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_TCM_TZSRG_CTRL);
+    tmpVal |= 1 << (region + 16);
+    tmpVal |= 1 << (region + 20);
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_TCM_TZSRG_CTRL, tmpVal);
+}
+
+/****************************************************************************/ /**
+ * @brief  TrustZone Security set XRAM region access configuration
+ *
+ * @param  region: XRAM region index 0-2
+ * @param  startAddr: XRAM region start address
+ * @param  length: XRAM region end length
+ * @param  group: XRAM region auth group type
+ *
+ * @return None
+ *
+*******************************************************************************/
+void ATTR_TCM_SECTION Tzc_Sec_XRAM_Access_Set_Advance(uint8_t region, uint32_t startAddr, uint32_t length, uint8_t group)
+{
+    uint32_t tmpVal = 0;
+    uint32_t alignEnd = (startAddr + length + 1023) & ~0x3FF;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(group));
+    if (region >= 3) {
+        return;
+    }
+    group &= 0xf;
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_XRAM_TZSRG_CTRL);
+    tmpVal &= (~(0xf << (region * 4)));
+    tmpVal |= (group << (region * 4));
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_XRAM_TZSRG_CTRL, tmpVal);
+
+    tmpVal = (((alignEnd >> 10) - 1) & 0x3ff) | (((startAddr >> 10) & 0x3ff) << 16);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_XRAM_TZSRG_R0_OFFSET + region * 4, tmpVal);
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_XRAM_TZSRG_CTRL);
+    tmpVal |= 1 << (region + 16);
+    tmpVal |= 1 << (region + 24);
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_XRAM_TZSRG_CTRL, tmpVal);
+}
+
+/****************************************************************************/ /**
+ * @brief  TrustZone Security set mini ram region access configuration
+ *
+ * @param  region: Mini ram region index 0-2
+ * @param  startAddr: Mini ram region start address
+ * @param  length: Mini ram region end length
+ * @param  group: Mini ram region auth group type
+ *
+ * @return None
+ *
+*******************************************************************************/
+void ATTR_TCM_SECTION Tzc_Sec_Mini_Ram_Access_Set_Advance(uint8_t region, uint32_t startAddr, uint32_t length, uint8_t group)
+{
+    uint32_t tmpVal = 0;
+    uint32_t alignEnd = (startAddr + length + 1023) & ~0x3FF;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(group));
+    if (region >= 3) {
+        return;
+    }
+    group &= 0xf;
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_MINI_RAM_TZSRG_CTRL);
+    tmpVal &= (~(0xf << (region * 4)));
+    tmpVal |= (group << (region * 4));
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_MINI_RAM_TZSRG_CTRL, tmpVal);
+
+    tmpVal = (((alignEnd >> 10) - 1) & 0xffff) | (((startAddr >> 10) & 0xffff) << 16);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_MINI_RAM_TZSRG_R0_OFFSET + region * 4, tmpVal);
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_MINI_RAM_TZSRG_CTRL);
+    tmpVal |= 1 << (region + 16);
+    tmpVal |= 1 << (region + 24);
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_MINI_RAM_TZSRG_CTRL, tmpVal);
+}
+
+/****************************************************************************/ /**
+ * @brief  TrustZone Security set Flash region access advance configuration
+ *
+ * @param  region: Flash region index 0-3
+ * @param  startAddr: Flash region start address
+ * @param  length: Flash region end length
+ * @param  group: Flash region auth group type
+ *
+ * @return None
+ *
+*******************************************************************************/
+void ATTR_TCM_SECTION Tzc_Sec_Flash_Access_Set_Advance(uint8_t region, uint32_t startAddr, uint32_t length, uint8_t group)
+{
+    uint32_t tmpVal = 0;
+    uint32_t tmpVal2 = 0;
+    uint32_t alignEnd = (startAddr + length + 1023) & ~0x3FF;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(group));
+    if (region >= 4) {
+        return;
+    }
+    group &= 0xf;
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_SF_TZSRG_CTRL);
+    tmpVal &= (~(0xf << (region * 4)));
+    tmpVal |= (group << (region * 4));
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_SF_TZSRG_CTRL, tmpVal);
+
+    tmpVal = (((alignEnd >> 10) - 1) & 0xffff) | (((startAddr >> 10) & 0xffff) << 16);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_SF_TZSRG_R0_OFFSET + region * 4, tmpVal);
+
+    tmpVal = BL_RD_WORD(TZC_SEC_BASE + TZC_SEC_TZC_SF_TZSRG_MSB_OFFSET);
+    tmpVal &= ~(0x77 << (8 * region));
+    tmpVal2 = ((((alignEnd >> 10) - 1) >> 16) & 0x7) | (((startAddr >> 26) & 0x7) << 4);
+    tmpVal |= tmpVal2 << (8 * region);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_SF_TZSRG_MSB_OFFSET, tmpVal);
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_SF_TZSRG_CTRL);
+    tmpVal |= 1 << (region + 20);
+    tmpVal |= 1 << (region + 25);
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_SF_TZSRG_CTRL, tmpVal);
+}
+
+/****************************************************************************/ /**
+ * @brief  TrustZone Security set PSRAMB region access configuration
+ *
+ * @param  region: PSRAMB region index 0-2
+ * @param  startAddr: PSRAMB region start address
+ * @param  length: PSRAMB region end length
+ * @param  group: PSRAMB region auth group type
+ *
+ * @return None
+ *
+*******************************************************************************/
+void ATTR_TCM_SECTION Tzc_Sec_PSRAMB_Access_Set_Advance(uint8_t region, uint32_t startAddr, uint32_t length, uint8_t group)
+{
+    uint32_t tmpVal = 0;
+    uint32_t alignEnd = (startAddr + length + 1023) & ~0x3FF;
+
+    CHECK_PARAM(IS_TZC_SEC_GROUP_TYPE(group));
+    if (region >= 3) {
+        return;
+    }
+    group &= 0xf;
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_PSRAMB_TZSRG_CTRL);
+    tmpVal &= (~(0xf << (region * 4)));
+    tmpVal |= (group << (region * 4));
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_PSRAMB_TZSRG_CTRL, tmpVal);
+
+    tmpVal = (((alignEnd >> 10) - 1) & 0xffff) | (((startAddr >> 10) & 0xffff) << 16);
+    BL_WR_WORD(TZC_SEC_BASE + TZC_SEC_TZC_PSRAMB_TZSRG_R0_OFFSET + region * 4, tmpVal);
+
+    tmpVal = BL_RD_REG(TZC_SEC_BASE, TZC_SEC_TZC_PSRAMB_TZSRG_CTRL);
+    tmpVal |= 1 << (region + 16);
+    tmpVal |= 1 << (region + 24);
+    BL_WR_REG(TZC_SEC_BASE, TZC_SEC_TZC_PSRAMB_TZSRG_CTRL, tmpVal);
+}
+
 static inline uint32_t Clock_SPI3_Clk_Mux_Output(uint8_t sel)
 {
     uint32_t tmpVal;
@@ -1124,6 +1724,52 @@ static inline uint32_t Clock_SPI3_Clk_Mux_Output(uint8_t sel)
         /* mini xclk */
         return Clock_System_Clock_Get(BL_SYSTEM_CLOCK_MINI_XCLK);
     }
+}
+
+static uint32_t Clock_Get_CPUPLL_Div1_Output(void)
+{
+    uint32_t refdiv;
+    uint32_t sdmin;
+    uint32_t tmpVal;
+    uint32_t xtal_value;
+
+    HBN_Get_Xtal_Value(&xtal_value);
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET);
+    refdiv = BL_GET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_REFCLK_DIV_RATIO);
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SDM1_OFFSET);
+    sdmin = BL_GET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_SDM_IN);
+
+    volatile uint32_t vco_divisor_value = 2048U;
+    volatile float vco_divisor = (float)vco_divisor_value;
+    float vco_float = (float)sdmin / vco_divisor * ((float)xtal_value / (float)refdiv);
+
+    return (uint32_t)vco_float;
+}
+
+static uint32_t Clock_Get_PSRAMB_Clk(void)
+{
+    uint32_t clock;
+    uint32_t div;
+    uint32_t tmpVal;
+    uint8_t clk_sel;
+
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_SYS_CFG2);
+    clk_sel = BL_GET_REG_BITS_VAL(tmpVal, GLB_PSRAM_CLK_SEL);
+    div = BL_GET_REG_BITS_VAL(tmpVal, GLB_PSRAM_CLK_DIV);
+
+    if (clk_sel == GLB_PSRAMB_CLK_BCLK) {
+        clock = Clock_System_Clock_Get(BL_SYSTEM_CLOCK_MCU_PBCLK);
+    } else if (clk_sel == GLB_PSRAMB_CLK_480M) {
+        clock = 480 * 1000 * 1000;
+    } else if (clk_sel == GLB_PSRAMB_CLK_320M) {
+        clock = 320 * 1000 * 1000;
+    } else if (clk_sel == GLB_PSRAMB_CLK_CPUPLL_DIV1) {
+        clock = Clock_Get_CPUPLL_Div1_Output();
+    } else {
+        return 0;
+    }
+
+    return clock / (div + 1);
 }
 
 /****************************************************************************/ /**
@@ -1148,8 +1794,10 @@ uint32_t Clock_Peripheral_Clock_Get(BL_Peripheral_Type type)
         clk_sel = BL_GET_REG_BITS_VAL(tmpVal, MINI_MISC_CR_SPI_CLK_SEL);
         div = BL_GET_REG_BITS_VAL(tmpVal, MINI_MISC_CR_SPI_CLK_DIV);
         clock = Clock_SPI3_Clk_Mux_Output(clk_sel);
-        
+
         return clock / (div + 1);
+    } else if (type == BL_PERIPHERAL_CLOCK_PSRAMB) {
+        return Clock_Get_PSRAMB_Clk();
     } else {
         return RomDriver_Clock_Peripheral_Clock_Get(type);
     }
@@ -1398,6 +2046,224 @@ BL_Err_Type ATTR_CLOCK_SECTION GLB_Config_CPUPLL_To_638P976M_By_Sdmin(void)
     tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SDM1_OFFSET);
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_SDM_IN, sdmin);
     BL_WR_WORD(CCI_BASE + CCI_CPUPLL_SDM1_OFFSET, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  GLB power on CPUPLL
+ *
+ * @param  cfg: GLB CPUPLL configuration
+ * @param  waitStable: wait CPUPLL clock stable
+ *
+ * @return SUCCESS or ERROR
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_CLOCK_SECTION GLB_Power_On_CPUPLL(const GLB_CPUPLL_Cfg_Type *const cfg, uint8_t waitStable)
+{
+    uint32_t val = 0;
+    uint32_t tmpVal = 0;
+
+    /* Step1:config parameter */
+    /* set refdiv_ratio, vco_speed, dtc_r_sel */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_REFCLK_DIV_RATIO, cfg->basicCfg->refdivRatio);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_VCO_SPEED, cfg->basicCfg->vcoSpeed);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_DTC_R_SEL, cfg->basicCfg->dtcRSel);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* set spd_gain */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SPD_FCAL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_SPD_GAIN, cfg->basicCfg->spdGain);
+#if !defined(CPU_MODEL_A0)
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_COARSE_GAIN, cfg->basicCfg->coarseGain);
+#endif
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_SPD_FCAL_OFFSET, tmpVal);
+
+    /* set alpha_base, alpha_exp, alpha_fast, beta_base, beta_exp, beta_fast */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_LF_VCTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LF_ALPHA_BASE, cfg->basicCfg->lfAlphaBase);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LF_ALPHA_EXP, cfg->basicCfg->lfAlphaExp);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LF_ALPHA_FAST, cfg->basicCfg->lfAlphaFast);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LF_BETA_BASE, cfg->basicCfg->lfBetaBase);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LF_BETA_EXP, cfg->basicCfg->lfBetaExp);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LF_BETA_FAST, cfg->basicCfg->lfBetaFast);
+#if !defined(CPU_MODEL_A0)
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_MOM_UPDATE_PERIOD, cfg->basicCfg->momUpdatePeriod);
+#endif
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_LF_VCTRL_OFFSET, tmpVal);
+
+    /* set cpupll_sdmin */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SDM1_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_SDM_IN, cfg->sdmin);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_SDM1_OFFSET, tmpVal);
+
+    /* set lms_ext_en, lms_ext_value */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SDM_LMS_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LMS_EXT_EN, cfg->basicCfg->lmsExtEn);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_LMS_EXT_VALUE, cfg->basicCfg->lmsExtValue);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_SDM_LMS_OFFSET, tmpVal);
+
+    /* set vco_idac_extra */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_RESV_OFFSET);
+    val = BL_GET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_RESV0);
+    val &= ~6;
+    val |= cfg->basicCfg->vcoIdacExtra << 1;
+#if !defined(CPU_MODEL_A0)
+    val &= ~30;
+    val |= cfg->basicCfg->resv0_5_4 << 4;
+#endif
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_RESV0, val);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_RESV_OFFSET, tmpVal);
+
+    /* Step2:config pu */
+    /* pu_cpupll=1, cpupll_rstb=1 */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_PU_CPUPLL, 1);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_RSTB, 1);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* delay > 2us */
+    arch_delay_us(3);
+
+    /* cpupll_rstb=0 */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_RSTB, 0);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* delay > 1us */
+    arch_delay_us(2);
+
+    /* cpupll_rstb=1 */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_RSTB, 1);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* Step3:enable output clock */
+    /* cpupll clock divider enable */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_CLKTREE_DIG_OFFSET);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV1);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV2);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV3);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV4);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV5);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV6);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV8);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV10);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV12);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV20);
+    tmpVal = BL_SET_REG_BIT(tmpVal, CCI_CPUPLL_EN_DIV30);
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_CLKTREE_DIG_OFFSET, tmpVal);
+
+    if (waitStable) {
+        /* Wait 1.5*180us    */
+        arch_delay_us(270);
+    }
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  GLB power on DSIPLL
+ *
+ * @param  cfg: GLB DSIPLL configuration
+ * @param  waitStable: wait DSIPLL clock stable
+ *
+ * @return SUCCESS or ERROR
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_CLOCK_SECTION GLB_Power_On_DSIPLL(const GLB_DSIPLL_Cfg_Type *const cfg, uint8_t waitStable)
+{
+    uint32_t val = 0;
+    uint32_t tmpVal = 0;
+
+    /* Step1:config parameter */
+    /* set refdiv_ratio, vco_speed, idac_extra */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_REFCLK_DIV_RATIO, cfg->basicCfg->refdiv_ratio);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_VCO_SPEED, cfg->basicCfg->vco_speed);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_VCO_IDAC_EXTRA, cfg->basicCfg->vco_idac_extra);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* set DSIpll_sdmin */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_SDMIN_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_SDM_IN, cfg->sdmin);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_SDMIN_OFFSET, tmpVal);
+
+    /* set dtc_r_sel */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_DTC_R_SEL, cfg->basicCfg->dtc_r_sel);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_TDC_DLY_SEL, cfg->basicCfg->tdc_dly_sel);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* set alpha_base, alpha_exp, alpha_fast, beta_base, beta_exp, beta_fast */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_LF_VCTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LF_ALPHA_BASE, cfg->basicCfg->lf_alpha_base);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LF_ALPHA_EXP, cfg->basicCfg->lf_alpha_exp);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LF_ALPHA_FAST, cfg->basicCfg->lf_alpha_fast);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LF_BETA_BASE, cfg->basicCfg->lf_beta_base);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LF_BETA_EXP, cfg->basicCfg->lf_beta_exp);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LF_BETA_FAST, cfg->basicCfg->lf_beta_fast);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_LF_VCTRL_OFFSET, tmpVal);
+
+    /* set spd_gain */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_SPD_FCAL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_SPD_GAIN, cfg->basicCfg->spd_gain);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_SPD_FCAL_OFFSET, tmpVal);
+
+    /* set lms_ext_en, lms_ext_value */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_SDM_LMS_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LMS_EXT_EN, cfg->basicCfg->lms_ext_en);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_LMS_EXT_VALUE, cfg->basicCfg->lms_ext_value);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_SDM_LMS_OFFSET, tmpVal);
+
+    /* set bitclk_div */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_CLKTREE_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_BICLK_DIV, cfg->basicCfg->bitclk_div);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_CLKTREE_OFFSET, tmpVal);
+
+    /* set resv0 */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_RESERVE_OFFSET);
+    val = BL_GET_REG_BITS_VAL(tmpVal, DSIPLL_RESV0);
+    val &= ~0x3;
+    val |= cfg->basicCfg->resv0_1_0 << 0;
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_RESV0, val);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_RESERVE_OFFSET, tmpVal);
+
+    /* Step2:config pu */
+    /* pu_DSIpll=1, DSIpll_rstb=1 */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_PU_DSIPLL, 1);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_RSTB, 1);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* delay > 2us */
+    arch_delay_us(3);
+
+    /* dsipll_rstb=0 */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_RSTB, 0);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* delay > 1us */
+    arch_delay_us(2);
+
+    /* dsipll_rstb=1 */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, DSIPLL_RSTB, 1);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_ANA_CTRL_OFFSET, tmpVal);
+
+    /* Step3:enable output clock */
+    /* dsipll clock divider enable */
+    tmpVal = BL_RD_WORD(DSI_PLL_BASE + DSIPLL_CLKTREE_OFFSET);
+    tmpVal = BL_SET_REG_BIT(tmpVal, DSIPLL_POSTDIV_EN);
+    tmpVal = BL_SET_REG_BIT(tmpVal, DSI_MIPLPLL_CLK_EN);
+    BL_WR_WORD(DSI_PLL_BASE + DSIPLL_CLKTREE_OFFSET, tmpVal);
+
+    if (waitStable) {
+        /* Wait 1.5*180us    */
+        arch_delay_us(270);
+    }
 
     return SUCCESS;
 }

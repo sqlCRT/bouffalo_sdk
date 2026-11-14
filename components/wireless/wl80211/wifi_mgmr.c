@@ -9,7 +9,9 @@
 #include "supplicant.h"
 #include "wl80211_platform.h"
 #include "timeout.h"
+#ifdef CONFIG_LPAPP
 #include "bl_lp.h"
+#endif
 
 #ifdef COMPAT_WIFI_MGMR
 #include "wifi_mgmr.h"
@@ -27,6 +29,8 @@ static struct {
 static uint16_t wifi_mgmr_listen_itv = 0;
 
 static void auth_cipher_convert(struct wl80211_scan_result_item *result, uint8_t *auth, uint8_t *cipher);
+
+void mm_sec_keydump(void);
 
 #if defined(CONFIG_WL80211_P2P)
 static struct {
@@ -414,7 +418,6 @@ static void wifi_mgmr_event_handler(async_input_event_t ev, void *priv)
         } break;
         case CODE_WIFI_ON_CONNECTED: {
             wl80211_printf("[APP] [EVT] %s, CODE_WIFI_ON_CONNECTED\r\n", __func__);
-            void mm_sec_keydump(void);
             mm_sec_keydump();
         } break;
         case CODE_WIFI_ON_GOT_IP: {
@@ -427,7 +430,7 @@ static void wifi_mgmr_event_handler(async_input_event_t ev, void *priv)
             wl80211_printf("[APP] [EVT] %s, CODE_WIFI_ON_GOT_IP\r\n", __func__);
         } break;
         case CODE_WIFI_ON_DISCONNECT: {
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
             bl_pm_event_bit_clear(PSM_EVENT_DISCONNECT);
 #endif
             wl80211_printf("[APP] [EVT] %s, CODE_WIFI_ON_DISCONNECT\r\n", __func__);
@@ -442,6 +445,7 @@ static void wifi_mgmr_event_handler(async_input_event_t ev, void *priv)
         } break;
         case CODE_WIFI_ON_AP_STA_ADD: {
             wl80211_printf("[APP] [EVT] [AP] [ADD] %ld\r\n", rtos_now(0));
+            mm_sec_keydump();
         } break;
         case CODE_WIFI_ON_AP_STA_DEL: {
             const uint8_t *mac = ((async_input_event_mac_t)ev)->mac;
@@ -681,9 +685,7 @@ int wifi_mgmr_sta_scan(const wifi_mgmr_scan_params_t *config)
     struct wl80211_scan_params scan_params;
     memset(&scan_params, 0, sizeof(struct wl80211_scan_params));
 
-#if defined(CONFIG_WL80211_P2P)
     if (config != NULL)
-#endif
     {
         scan_params.ssid_len = config->ssid_length;
         if (config->ssid_length) {

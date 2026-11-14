@@ -1,4 +1,39 @@
 # Changes
+## 2026-10-13
+1. [BR/EDR] Preserve Inquiry Scan and Page Scan flags after connection failures and disconnections to keep the host synchronized with the controller's Scan Enable configuration, preventing subsequent scan-disable requests from incorrectly returning -EALREADY.
+
+## 2026-10-09
+1. [HCI] Fix CVE-2023-0396: when the controller returns incomplete command parameters, Host initialization and APIs such as bt_le_read_rssi() and bt_le_read_chan_map() could read beyond the response buffer. Check lengths before accessing fields in these paths, PRNG setup and hast_ble_reset(), and handle a missing status byte in hci_cmd_complete().
+2. [HCI] Fix CVE-2023-0397: during Host initialization, le_read_buffer_size_complete() could pass a zero packet count from the controller's LE Read Buffer Size response to TX credit semaphore setup. Reject the zero count before updating LE buffer state or initializing credits.
+3. [HCI] Fix CVE-2024-5754: hci_encrypt_change() could repeat security processing when the controller sent a successful Encryption Change event with the same encryption state already stored for the connection. Ignore the duplicate before updating state or notifying the security handlers.
+4. [L2CAP] Fix CVE-2025-10456: when a peer sends an LE Flow Control Credit indication with a non-dynamic CID or zero credits, le_credits() could pass it to channel lookup and TX credit handling. Reject both cases before looking up the channel or changing its credits.
+5. [L2CAP] Fix CVE-2025-10457: le_conn_rsp() and le_disconn_rsp() matched peer responses without checking which request was pending, allowing an unrelated response to change or remove a channel. Track the request opcode with its signaling identifier and require both to match; also verify the disconnect response SCID belongs to that channel.
+6. [L2CAP] Fix CVE-2025-10458: le_conn_rsp() could accept a peer's successful CoC response with an invalid destination CID or MTU/MPS, leaving unusable channel parameters. Validate the CID and protocol limits before installing them, disconnect the ACL on an invalid successful response, and make le_conn_req() reply with Unacceptable Parameters for invalid MTU/MPS.
+7. [L2CAP] Fix CVE-2026-5068: while reassembling a segmented CoC SDU, l2cap_chan_le_recv_sdu() writes a 16-bit segment counter into net_buf user_data; a configuration smaller than two bytes would overwrite memory. Add a build assertion requiring enough space when CONFIG_BT_L2CAP_DYNAMIC_CHANNEL is enabled.
+8. [host/conn] Fix CVE-2023-2234: HCI event handlers used bt_conn_lookup_handle() without checking the link type, so an event carrying another type's handle could access the wrong LE or BR/EDR fields in bt_conn. Add an expected-type argument and reject mismatches before returning the connection to the handler.
+9. [GATT] Fix CVE-2024-1638: when a peer reads or writes an attribute marked READ_LESC or WRITE_LESC, the 8-bit permission storage/mask and incomplete read/write masks could lose the LESC bits and skip the SC check in bt_gatt_check_perm(). Widen permissions and the check mask to 16 bits and include LESC in both read/write masks so access requires an encrypted link with an SC key.
+
+## 2026-9-23
+1. Fixed the BLE advertising-name shortening underflow by allowing truncation only when shortened_len > 0, otherwise returning -EINVAL before memcpy().
+
+## 2026-9-20
+1. [BR/EDR] Stop treating a failed HCI Read_Encryption_Key_Size as an insufficient encryption key. Insufficient Security (0x2f) and Command Disallowed (0x0c) describe the link state, not the key size, so the key size is now reported as unknown and the security level is re-checked on the next encryption change or key refresh. This caused spurious AUTH_FAIL disconnects when reconnecting a headset, where the controller could not yet serve the command at connection setup.
+
+## 2026-9-10
+1. [A2DP Sink] Automatically request a Master-to-Slave role switch only for locally initiated BR/EDR connections, improving interoperability with iPhone A2DP connections.
+
+## 2026-08-21
+1.Support compiling ble throughput test code as slave-only.
+
+## 2026-08-19
+1. [ble_cli_cmds] Add BL618DG RF coexistence CLI controls: ble_coex_rf_start, ble_coex_rf_stop, and ble_coex_rf_set for Bluetooth/WiFi time slicing and manual RF selection.
+2. [bredr_cli_cmds] Add A2DP Sink statistics CLI support with one-shot reporting, periodic reporting, and manual stopping, including bitrate, sequence range, and packet count.
+3. [bredr_cli_cmds] Add HFP SCO test-tone simulation and RX sample inspection commands for CVSD audio-path validation.
+
+## 2026-08-18
+1. [BR/EDR] Enable sniff mode in the default link policy so the controller accepts sniff negotiation; without it idle ACL links stay in Active mode and break WLAN/BT coex.
+2. [BR/EDR] Send Sniff/Exit Sniff Mode commands synchronously to surface Command Status rejections, enable the Mode Change event, and clarify sniff/unsniff CLI output.
+
 ## 2026-08-12
 1. [BR/EDR] Add per-device Extended Inquiry Result callback support under BFLB_BREDR_PATCH_EXTENDED_INQUIRY_RESULT_CALLBACK, with CLI test output for address, class of device, RSSI, and EIR name.
 

@@ -8,6 +8,9 @@
 
 #ifdef CONFIG_IPC
 #include <flash_ops_rpmsg.h>
+#ifdef CONFIG_SOCKET_OFFLOAD
+#include "socket_offload.h"
+#endif
 #endif
 
 static struct bflb_device_s *uart0;
@@ -29,6 +32,16 @@ int main(void)
         printf("[AP] RPMsg init failed: %d\r\n", ret);
         return ret;
     }
+#ifdef CONFIG_SOCKET_OFFLOAD
+    ret = rpmsg_and_rpc_init();
+    if (ret != 0) {
+        return ret;
+    }
+    ret = socket_offload_init();
+    if (ret != 0) {
+        return ret;
+    }
+#endif
 #endif
 
     vTaskStartScheduler();

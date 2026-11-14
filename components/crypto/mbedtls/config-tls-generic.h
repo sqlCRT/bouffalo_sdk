@@ -17,6 +17,11 @@
 #define MBEDTLS_PLATFORM_NO_STD_FUNCTIONS
 #define MBEDTLS_PLATFORM_STD_MEM_HDR "mbedtls_port_bouffalo_sdk.h"
 
+#if !defined(CONFIG_MBEDTLS_PLATFORM_NO_SYSTEM_ALLOCATOR)
+#define MBEDTLS_PLATFORM_CALLOC_MACRO calloc
+#define MBEDTLS_PLATFORM_FREE_MACRO   free
+#endif
+
 #define MBEDTLS_NO_PLATFORM_ENTROPY
 
 // Hash HW
@@ -35,6 +40,11 @@
 // AES HW
 #if defined(CONFIG_MBEDTLS_AES_USE_HW)
 #define MBEDTLS_AES_ALT
+#endif
+
+// Use the SDK GCM alternative without changing the hardware AES implementation.
+#if defined(CONFIG_MBEDTLS_GCM_SOFTWARE_AES)
+#define MBEDTLS_GCM_ALT
 #endif
 
 // ECC HW
