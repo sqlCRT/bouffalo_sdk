@@ -102,6 +102,8 @@ int main(void)
         .audac_dev_name = "audac",
         .playback_backend = WAVE_PLAYER_BACKEND_BL_CODEC,
         .capture_backend = WAVE_PLAYER_BACKEND_I2S_CODEC,
+        /* Keep this example's original slot-0 microphone selection. */
+        .capture_layout = { .mic_mask = 0x01U },
     };
     if (wave_player_init(&audio_hw_cfg) != 0) {
         printf("[ERROR] wave_player_init failed\r\n");

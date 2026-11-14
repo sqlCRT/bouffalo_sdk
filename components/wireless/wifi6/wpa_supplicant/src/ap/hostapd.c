@@ -1621,7 +1621,8 @@ static int setup_interface(struct hostapd_iface *iface)
 		wpa_printf(MSG_DEBUG, "Previous country code %s, new country code %s",
 			   previous_country, country);
 
-		if (os_strncmp(previous_country, country, 2) != 0) {
+		if (os_strncmp(previous_country, country, 2) != 0 &&
+		    hapd->driver && hapd->driver->get_country) {
 			wpa_printf(MSG_DEBUG, "Continue interface setup after channel list update");
 			iface->wait_channel_update = 1;
 			eloop_register_timeout(5, 0,
@@ -3224,6 +3225,7 @@ void hostapd_new_assoc_sta(struct hostapd_data *hapd, struct sta_info *sta,
 	hostapd_prune_associations(hapd, sta->addr);
 	ap_sta_clear_disconnect_timeouts(hapd, sta);
 	sta->post_csa_sa_query = 0;
+	sta->credential_mismatch_reported = 0;
 
 #ifdef CONFIG_P2P
 	if (sta->p2p_ie == NULL && !sta->no_p2p_set) {

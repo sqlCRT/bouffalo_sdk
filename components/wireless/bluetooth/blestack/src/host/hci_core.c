@@ -902,7 +902,7 @@ static void hci_acl(struct net_buf *buf)
 		return;
 	}
 
-	conn = bt_conn_lookup_handle(acl(buf)->handle);
+	conn = bt_conn_lookup_handle(acl(buf)->handle, BT_CONN_TYPE_ALL);
 	if (!conn) {
 		BT_ERR("Unable to find conn for handle %u", acl(buf)->handle);
 		net_buf_unref(buf);
@@ -949,7 +949,7 @@ static void hci_num_completed_packets(struct net_buf *buf)
 
 		key = irq_lock();
 
-		conn = bt_conn_lookup_handle(handle);
+		conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_ALL);
 		if (!conn) {
 			irq_unlock(key);
 			BT_ERR("No connection for handle %u", handle);
@@ -1204,7 +1204,7 @@ static void hci_disconn_complete(struct net_buf *buf)
 		return;
 	}
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_ALL);
 	if (!conn) {
 		BT_ERR("Unable to look up conn with handle %u", handle);
 		goto advertise;
@@ -1350,6 +1350,11 @@ static void hci_le_set_data_len(struct bt_conn *conn)
 	}
 
 	rp = (void *)rsp->data;
+	if (rsp->len < sizeof(*rp)) {
+		BT_ERR("Invalid LE maximum data length response");
+		net_buf_unref(rsp);
+		return;
+	}
 	tx_octets = sys_le16_to_cpu(rp->max_tx_octets);
 	tx_time = sys_le16_to_cpu(rp->max_tx_time);
 	net_buf_unref(rsp);
@@ -1411,6 +1416,10 @@ int bt_le_read_chan_map(struct bt_conn *conn, struct bt_hci_rp_le_read_chan_map 
     }
 
     struct bt_hci_rp_le_read_chan_map *rp = (void *)rsp->data;
+    if (rsp->len < sizeof(*rp)) {
+        net_buf_unref(rsp);
+        return -EINVAL;
+    }
     if(rsp_buf)
     {
         rsp_buf->status = rp->status;
@@ -1856,7 +1865,7 @@ static void le_remote_feat_complete(struct net_buf *buf)
 	u16_t handle = sys_le16_to_cpu(evt->handle);
 	struct bt_conn *conn;
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_LE);
 	if (!conn) {
 		BT_ERR("Unable to lookup conn for handle %u", handle);
 		return;
@@ -1913,7 +1922,7 @@ static void le_data_len_change(struct net_buf *buf)
 	UNUSED(max_tx_time);
 	UNUSED(max_rx_time);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_LE);
 	if (!conn) {
 		BT_ERR("Unable to lookup conn for handle %u", handle);
 		return;
@@ -1937,7 +1946,7 @@ static void le_phy_update_complete(struct net_buf *buf)
 	u16_t handle = sys_le16_to_cpu(evt->handle);
 	struct bt_conn *conn;
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_LE);
 	if (!conn) {
 		BT_ERR("Unable to lookup conn for handle %u", handle);
 		return;
@@ -2046,7 +2055,7 @@ static void le_conn_param_req(struct net_buf *buf)
 	param.latency = sys_le16_to_cpu(evt->latency);
 	param.timeout = sys_le16_to_cpu(evt->timeout);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_LE);
 	if (!conn) {
 		BT_ERR("Unable to lookup conn for handle %u", handle);
 		le_conn_param_neg_reply(handle, BT_HCI_ERR_UNKNOWN_CONN_ID);
@@ -2072,7 +2081,7 @@ static void le_conn_update_complete(struct net_buf *buf)
 
 	BT_DBG("status 0x%02x, handle %u", evt->status, handle);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_LE);
 	if (!conn) {
 		BT_ERR("Unable to lookup conn for handle %u", handle);
 		return;
@@ -2448,7 +2457,13 @@ static void conn_req(struct net_buf *buf)
 	bt_conn_unref(conn);
 }
 
-static bool br_sufficient_key_size(struct bt_conn *conn)
+enum br_key_size {
+	BR_KEY_SIZE_OK,		/* key size reported and sufficient */
+	BR_KEY_SIZE_INSUFFICIENT,	/* key size reported but too small */
+	BR_KEY_SIZE_UNKNOWN,	/* controller reported no key size */
+};
+
+static enum br_key_size br_check_key_size(struct bt_conn *conn)
 {
 	struct bt_hci_cp_read_encryption_key_size *cp;
 	struct bt_hci_rp_read_encryption_key_size *rp;
@@ -2460,7 +2475,7 @@ static bool br_sufficient_key_size(struct bt_conn *conn)
 				sizeof(*cp));
 	if (!buf) {
 		BT_ERR("Failed to allocate command buffer");
-		return false;
+		return BR_KEY_SIZE_UNKNOWN;
 	}
 
 	cp = net_buf_add(buf, sizeof(*cp));
@@ -2469,14 +2484,24 @@ static bool br_sufficient_key_size(struct bt_conn *conn)
 	err = bt_hci_cmd_send_sync(BT_HCI_OP_READ_ENCRYPTION_KEY_SIZE,
 				   buf, &rsp);
 	if (err) {
-		BT_ERR("Failed to read encryption key size (err %d)", err);
-		return false;
+		/* A failure here describes the link state, not the key size:
+		 * Insufficient Security (0x2f) means the link is not (yet)
+		 * encrypted, and Command Disallowed (0x0c) means the controller
+		 * cannot process the command in its current state. Neither proves
+		 * the key is short, so report the size as unknown instead of
+		 * failing the link.
+		 */
+		BT_WARN("Enc key size not reported (err %d) handle %u state %u "
+			"role %u encrypt %u addr %s",
+			err, conn->handle, conn->state, conn->role,
+			conn->encrypt, bt_addr_str(&conn->br.dst));
+		return BR_KEY_SIZE_UNKNOWN;
 	}
 
 	if (rsp->len < sizeof(*rp)) {
 		BT_ERR("Too small command complete for encryption key size");
 		net_buf_unref(rsp);
-		return false;
+		return BR_KEY_SIZE_UNKNOWN;
 	}
 
 	rp = (void *)rsp->data;
@@ -2486,10 +2511,12 @@ static bool br_sufficient_key_size(struct bt_conn *conn)
 	BT_DBG("Encryption key size is %u", key_size);
 
 	if (conn->sec_level == BT_SECURITY_L4) {
-		return key_size == BT_HCI_ENCRYPTION_KEY_SIZE_MAX;
+		return key_size == BT_HCI_ENCRYPTION_KEY_SIZE_MAX ?
+			BR_KEY_SIZE_OK : BR_KEY_SIZE_INSUFFICIENT;
 	}
 
-	return key_size >= BT_HCI_ENCRYPTION_KEY_SIZE_MIN;
+	return key_size >= BT_HCI_ENCRYPTION_KEY_SIZE_MIN ?
+		BR_KEY_SIZE_OK : BR_KEY_SIZE_INSUFFICIENT;
 }
 
 static bool update_sec_level_br(struct bt_conn *conn)
@@ -2514,10 +2541,18 @@ static bool update_sec_level_br(struct bt_conn *conn)
 		conn->sec_level = BT_SECURITY_L2;
 	}
 
-	if (!br_sufficient_key_size(conn)) {
-		BT_ERR("Encryption key size is not sufficient");
+	switch (br_check_key_size(conn)) {
+	case BR_KEY_SIZE_INSUFFICIENT:
+		BT_ERR("Encryption key size is not sufficient, handle %u "
+		       "state %u role %u encrypt %u addr %s",
+		       conn->handle, conn->state, conn->role, conn->encrypt,
+		       bt_addr_str(&conn->br.dst));
 		bt_conn_disconnect(conn, BT_HCI_ERR_AUTH_FAIL);
 		return false;
+	case BR_KEY_SIZE_UNKNOWN:
+		break;
+	case BR_KEY_SIZE_OK:
+		break;
 	}
 
 	if (conn->required_sec_level > conn->sec_level) {
@@ -3335,7 +3370,7 @@ static void auth_complete(struct net_buf *buf)
 
 	BT_DBG("status 0x%02x, handle %u", evt->status, handle);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_BR);
 	if (!conn) {
 		BT_ERR("Can't find conn for handle %u", handle);
 		return;
@@ -3366,7 +3401,7 @@ static void read_remote_features_complete(struct net_buf *buf)
 
 	BT_DBG("status 0x%02x handle %u", evt->status, handle);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_BR);
 	if (!conn) {
 		BT_ERR("Can't find conn for handle %u", handle);
 		return;
@@ -3409,7 +3444,7 @@ static void read_remote_version_complete(struct net_buf *buf)
 
 	BT_DBG("status 0x%02x handle %u", evt->status, handle);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_ALL);
 	if (!conn) {
 		BT_ERR("Can't find conn for handle %u", handle);
 		return;
@@ -3438,7 +3473,7 @@ static void read_remote_ext_features_complete(struct net_buf *buf)
 
 	BT_DBG("status 0x%02x handle %u", evt->status, handle);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_BR);
 	if (!conn) {
 		BT_ERR("Can't find conn for handle %u", handle);
 		return;
@@ -3457,8 +3492,9 @@ static void role_change(struct net_buf *buf)
 	struct bt_hci_evt_role_change *evt = (void *)buf->data;
 	struct bt_conn *conn;
 
-	BT_DBG("status 0x%02x role %u addr %s", evt->status, evt->role,
-	       bt_addr_str(&evt->bdaddr));
+	BT_WARN("[BR_ROLE] changed: %s status=0x%02x role=%u (0=master,1=slave)",
+	       bt_addr_str(&evt->bdaddr), evt->status, evt->role);
+
 
 	if (evt->status) {
 		return;
@@ -3509,7 +3545,7 @@ static void mode_change(struct net_buf *buf)
 		break;
 	}
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_BR);
 	if (conn) {
 		BT_WARN("Mode change: conn %p now %s (interval %u slots, %u ms)",
 			conn, mode_str, interval, (interval * 625) / 1000);
@@ -3831,7 +3867,7 @@ static void hci_encrypt_change(struct net_buf *buf)
 	BT_DBG("status 0x%02x handle %u encrypt 0x%02x", evt->status, handle,
 	       evt->encrypt);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_ALL);
 	if (!conn) {
 		BT_ERR("Unable to look up conn with handle %u", handle);
 		return;
@@ -3841,6 +3877,11 @@ static void hci_encrypt_change(struct net_buf *buf)
 		reset_pairing(conn);
 		bt_l2cap_encrypt_change(conn, evt->status);
 		bt_conn_security_changed(conn, security_err_get(evt->status));
+		bt_conn_unref(conn);
+		return;
+	}
+
+	if (conn->encrypt == evt->encrypt) {
 		bt_conn_unref(conn);
 		return;
 	}
@@ -3900,7 +3941,7 @@ static void hci_encrypt_key_refresh_complete(struct net_buf *buf)
 
 	BT_DBG("status 0x%02x handle %u", evt->status, handle);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_ALL);
 	if (!conn) {
 		BT_ERR("Unable to look up conn with handle %u", handle);
 		return;
@@ -3991,7 +4032,7 @@ static void le_ltk_request(struct net_buf *buf)
 
 	BT_DBG("handle %u", handle);
 
-	conn = bt_conn_lookup_handle(handle);
+	conn = bt_conn_lookup_handle(handle, BT_CONN_TYPE_LE);
 	if (!conn) {
 		BT_ERR("Unable to lookup conn for handle %u", handle);
 		return;
@@ -4109,7 +4150,7 @@ static void hci_cmd_complete(struct net_buf *buf)
 	/* All command return parameters have a 1-byte status in the
 	 * beginning, so we can safely make this generalization.
 	 */
-	status = buf->data[0];
+	status = buf->len ? buf->data[0] : BT_HCI_ERR_UNSPECIFIED;
 
 	hci_cmd_done(opcode, status, buf);
 
@@ -4760,9 +4801,24 @@ static void hci_tx_thread(void *p1, void *p2, void *p3)
 	}
 }
 
+static bool hci_cmd_rsp_len_valid(struct net_buf *buf, size_t len)
+{
+	if (buf->len < len) {
+		BT_ERR("Invalid HCI response length %u (expected %u)",
+		       buf->len, len);
+		return false;
+	}
+
+	return true;
+}
+
 static void read_local_ver_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_read_local_version_info *rp = (void *)buf->data;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("status 0x%02x", rp->status);
 
@@ -4776,6 +4832,10 @@ static void read_local_ver_complete(struct net_buf *buf)
 static void read_bdaddr_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_read_bd_addr *rp = (void *)buf->data;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("status 0x%02x", rp->status);
 
@@ -4801,6 +4861,10 @@ static void read_le_features_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_le_read_local_features *rp = (void *)buf->data;
 
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
+
 	BT_DBG("status 0x%02x", rp->status);
 
 	memcpy(bt_dev.le.features, rp->features, sizeof(bt_dev.le.features));
@@ -4811,6 +4875,10 @@ static void read_buffer_size_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_read_buffer_size *rp = (void *)buf->data;
 	u16_t pkts;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("status 0x%02x", rp->status);
 
@@ -4826,6 +4894,10 @@ static void read_buffer_size_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_read_buffer_size *rp = (void *)buf->data;
 	u16_t pkts;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("status 0x%02x", rp->status);
 
@@ -4848,7 +4920,16 @@ static void le_read_buffer_size_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_le_read_buffer_size *rp = (void *)buf->data;
 
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
+
 	BT_DBG("status 0x%02x", rp->status);
+
+	if (!rp->le_max_num) {
+		BT_ERR("Invalid LE buffer count");
+		return;
+	}
 
 	bt_dev.le.mtu = sys_le16_to_cpu(rp->le_max_len);
 	if (!bt_dev.le.mtu) {
@@ -4864,6 +4945,10 @@ static void le_read_buffer_size_complete(struct net_buf *buf)
 static void read_supported_commands_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_read_supported_commands *rp = (void *)buf->data;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("status 0x%02x", rp->status);
 
@@ -4884,6 +4969,10 @@ static void read_local_features_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_read_local_features *rp = (void *)buf->data;
 
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
+
 	BT_DBG("status 0x%02x", rp->status);
 
 	memcpy(bt_dev.features[0], rp->features, sizeof(bt_dev.features[0]));
@@ -4892,6 +4981,10 @@ static void read_local_features_complete(struct net_buf *buf)
 static void le_read_supp_states_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_le_read_supp_states *rp = (void *)buf->data;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("status 0x%02x", rp->status);
 
@@ -4902,6 +4995,10 @@ static void le_read_supp_states_complete(struct net_buf *buf)
 static void le_read_resolving_list_size_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_le_read_rl_size *rp = (void *)buf->data;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("Resolving List size %u", rp->rl_size);
 
@@ -4914,6 +5011,10 @@ static void le_read_wl_size_complete(struct net_buf *buf)
 {
 	struct bt_hci_rp_le_read_wl_size *rp =
 		(struct bt_hci_rp_le_read_wl_size *)buf->data;
+
+	if (!hci_cmd_rsp_len_valid(buf, sizeof(*rp))) {
+		return;
+	}
 
 	BT_DBG("Whitelist size %u", rp->wl_size);
 
@@ -5137,6 +5238,10 @@ static int le_init(void)
 		}
 
 		rp = (void *)rsp->data;
+		if (!hci_cmd_rsp_len_valid(rsp, sizeof(*rp))) {
+			net_buf_unref(rsp);
+			return -EINVAL;
+		}
 		tx_octets = sys_le16_to_cpu(rp->max_tx_octets);
 		tx_time = sys_le16_to_cpu(rp->max_tx_time);
 		net_buf_unref(rsp);
@@ -5230,6 +5335,10 @@ static int read_ext_features(void)
 		}
 
 		rp = (void *)rsp->data;
+		if (!hci_cmd_rsp_len_valid(rsp, sizeof(*rp))) {
+			net_buf_unref(rsp);
+			return -EINVAL;
+		}
 
 		memcpy(&bt_dev.features[i], rp->ext_features,
 		       sizeof(bt_dev.features[i]));
@@ -5339,15 +5448,19 @@ static int br_init(void)
 	}
 
 #if defined(BFLB_BREDR_PATCH_ENABLE_BREDR_DEFAULT_ROLE_SWITCH_POLICY)
-	/* Enable role switch in default link policy so the controller
-	 * accepts incoming role switch requests. */
+	/* Enable role switch and sniff mode in default link policy so the
+	 * controller accepts incoming role switch / sniff negotiation and
+	 * allows the host to request sniff mode. Without the sniff bit the
+	 * controller rejects every Sniff Mode command with COMMAND_DISALLOWED,
+	 * which keeps idle ACL links in Active mode and breaks WLAN/BT coex
+	 * (high-rate BR/EDR RX requests starve WLAN RX). */
 	buf = bt_hci_cmd_create(BT_HCI_OP_WRITE_DEFAULT_LINK_POLICY, sizeof(*lp_cp));
 	if (!buf) {
 		return -ENOBUFS;
 	}
 	lp_cp = net_buf_add(buf, sizeof(*lp_cp));
 	lp_cp->link_policy = sys_cpu_to_le16(BT_LINK_POLICY_ENABLE_ROLE_SWITCH |
-					      BT_LINK_POLICY_ENABLE_SNIFF_MODE);
+					     BT_LINK_POLICY_ENABLE_SNIFF_MODE);
 	err = bt_hci_cmd_send_sync(BT_HCI_OP_WRITE_DEFAULT_LINK_POLICY, buf, NULL);
 	if (err) {
 		return err;
@@ -5520,7 +5633,6 @@ static int set_event_mask(void)
 		mask |= BT_EVT_MASK_REMOTE_NAME_REQ_COMPLETE;
 		mask |= BT_EVT_MASK_REMOTE_FEATURES;
 		mask |= BT_EVT_MASK_ROLE_CHANGE;
-		mask |= BT_EVT_MASK_MODE_CHANGE;
 		mask |= BT_EVT_MASK_PIN_CODE_REQ;
 		mask |= BT_EVT_MASK_LINK_KEY_REQ;
 		mask |= BT_EVT_MASK_LINK_KEY_NOTIFY;
@@ -5534,6 +5646,11 @@ static int set_event_mask(void)
 		mask |= BT_EVT_MASK_USER_PASSKEY_REQ;
 		mask |= BT_EVT_MASK_SSP_COMPLETE;
 		mask |= BT_EVT_MASK_USER_PASSKEY_NOTIFY;
+#if defined(BFLB_BREDR_PATCH_ENABLE_SNIFF_MODE)
+		/* Mode Change event: required to observe actual sniff mode
+		 * transitions (both locally requested and remote negotiated). */
+		mask |= BT_EVT_MASK_MODE_CHANGE;
+#endif
 	}
 
 	mask |= BT_EVT_MASK_HARDWARE_ERROR;
@@ -5988,7 +6105,7 @@ static int bt_init(void)
 	}
 #endif /* CONFIG_BLE_USING_DYNAMIC_RAM */
 
-/*Make sure that freertos is running when set info into flash, because Semaphore is used in ef_set_env*/
+/*Make sure that freertos is running when set info into flash, because Semaphore is used in lfs_kv_set_blob*/
 #if defined(BFLB_BLE_PATCH_SETTINGS_LOAD)
     char empty_name[CONFIG_BT_DEVICE_NAME_MAX];
     memset(empty_name, 0, CONFIG_BT_DEVICE_NAME_MAX);
@@ -6625,26 +6742,28 @@ static int set_ad(u16_t hci_op, const struct bt_ad *ad, size_t ad_len)
 		const struct bt_data *data = ad[c].data;
 
 		for (i = 0; i < ad[c].len; i++) {
-			int len = data[i].data_len;
+			size_t len = data[i].data_len;
 			u8_t type = data[i].type;
 
-			/* Check if ad fit in the remaining buffer */
+			/* Check if ad fits in the remaining buffer. */
 			if (set_data->len + len + 2 > 31) {
-				len = 31 - (set_data->len + 2);
-				if (type != BT_DATA_NAME_COMPLETE || !len) {
+				ssize_t shortened_len = 31 - (set_data->len + 2);
+
+				if (!(type == BT_DATA_NAME_COMPLETE && shortened_len > 0)) {
 					net_buf_unref(buf);
 					BT_ERR("Too big advertising data");
 					return -EINVAL;
 				}
+
 				type = BT_DATA_NAME_SHORTENED;
+				len = (size_t)shortened_len;
 			}
 
-			set_data->data[set_data->len++] = len + 1;
+			set_data->data[set_data->len++] = (u8_t)(len + 1);
 			set_data->data[set_data->len++] = type;
 
-			memcpy(&set_data->data[set_data->len], data[i].data,
-			       len);
-			set_data->len += len;
+			memcpy(&set_data->data[set_data->len], data[i].data, len);
+			set_data->len += (u8_t)len;
 		}
 	}
 
@@ -7382,6 +7501,10 @@ int bt_le_read_rssi(u16_t handle,int8_t *rssi)
 	}
 
 	rsp_rssi = (struct bt_hci_rp_read_rssi *) rsp->data;
+	if (!hci_cmd_rsp_len_valid(rsp, sizeof(*rsp_rssi))) {
+		net_buf_unref(rsp);
+		return -EINVAL;
+	}
 	*rssi = rsp_rssi->rssi;
 
 	net_buf_unref(rsp);
@@ -8373,6 +8496,10 @@ int bt_get_controller_sdk_version(struct bt_controller_sdk_ver *version)
     }
 
     rp = (void *)rsp->data;
+	if (!hci_cmd_rsp_len_valid(rsp, sizeof(*rp))) {
+		net_buf_unref(rsp);
+		return -EINVAL;
+	}
 
     BT_DBG("status 0x%02x", rp->status);
 
@@ -8766,6 +8893,12 @@ int bt_br_conn_enter_sniff(struct bt_conn *conn, u16_t min_interval,
 	cp->attempt = sys_cpu_to_le16(4);
 	cp->timeout = sys_cpu_to_le16(1);
 
+	/* Sniff Mode is a Command Status command: the controller replies with
+	 * Command Status (accept / reject, e.g. COMMAND_DISALLOWED when the
+	 * link policy does not allow sniff) followed by a Mode Change event
+	 * when the transition actually happens. The sync send surfaces the
+	 * Command Status to the caller so rejections are not silently lost.
+	 */
 	return bt_hci_cmd_send_sync(BT_HCI_OP_SNIFF_MODE, buf, NULL);
 }
 
@@ -8786,6 +8919,7 @@ int bt_br_conn_exit_sniff(struct bt_conn *conn)
 	cp = net_buf_add(buf, sizeof(*cp));
 	cp->handle = sys_cpu_to_le16(conn->handle);
 
+	/* Exit Sniff Mode: same Command Status semantics as Sniff Mode. */
 	return bt_hci_cmd_send_sync(BT_HCI_OP_EXIT_SNIFF_MODE, buf, NULL);
 }
 #endif /* BFLB_BREDR_PATCH_ENABLE_SNIFF_MODE */
@@ -9188,6 +9322,10 @@ int bt_le_test_end(void)
 		return err;
 	}
     rp = (void *)rsp->data;
+	if (!hci_cmd_rsp_len_valid(rsp, sizeof(*rp))) {
+		net_buf_unref(rsp);
+		return -EINVAL;
+	}
 
     err = rp->status;
     if(err == 0)

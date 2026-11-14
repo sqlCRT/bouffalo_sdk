@@ -63,7 +63,18 @@ void * pvPortMalloc( size_t xWantedSize )
 
     vTaskSuspendAll();
     {
-        pvReturn = kmalloc( xWantedSize, 0 );
+        pvReturn = kmalloc( xWantedSize, MM_FLAG_HEAP_OCRAM_0 );
+        #if defined( CONFIG_FREERTOS_INTERNAL_WRAM_FALLBACK ) && ( CONFIG_FREERTOS_INTERNAL_WRAM_FALLBACK == 1 )
+        {
+            /* BL616/BL618 can register unused internal WRAM separately. Keep
+             * RTOS objects in internal RAM without excluding that second heap.
+             * Do not use HEAP_ANY: another board may register external PSRAM. */
+            if( pvReturn == NULL )
+            {
+                pvReturn = kmalloc( xWantedSize, MM_FLAG_HEAP_WRAM_0 );
+            }
+        }
+        #endif
         traceMALLOC( pvReturn, xWantedSize );
     }
     ( void ) xTaskResumeAll();

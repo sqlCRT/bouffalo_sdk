@@ -1,4 +1,3 @@
-# POST_PROC combine
 if("${CMAKE_HOST_SYSTEM_NAME}" STREQUAL "Windows")
     set(TOOL_SUFFIX ".exe")
     set(CMAKE ${BL_SDK_BASE}/tools/cmake/bin/cmake.exe)
@@ -10,6 +9,7 @@ elseif("${CMAKE_HOST_SYSTEM_NAME}" STREQUAL "Darwin")
     set(CMAKE cmake)
 endif()
 
+set(PROJECT_SDK_VERSION ${CONFIG_PROJECT_SDK_VERSION})
 if(NOT DEFINED PROJECT_SDK_VERSION OR PROJECT_SDK_VERSION STREQUAL "")
     if(EXISTS "${BL_SDK_BASE}/VERSION")
         file(READ "${BL_SDK_BASE}/VERSION" VERSION_FILE_CONTENT)
@@ -22,10 +22,127 @@ if(NOT DEFINED PROJECT_SDK_VERSION OR PROJECT_SDK_VERSION STREQUAL "")
     endif()
 endif()
 
-set(BL_FW_POST_PROC ${BL_SDK_BASE}/tools/bflb_tools/bflb_fw_post_proc/bflb_fw_post_proc${TOOL_SUFFIX})
-set(BL_FW_POST_PROC_CONFIG --chipname=${CHIP} --imgfile=${BIN_FILE} --appkeys=shared)
+if(EXISTS "${BL_SDK_BASE}/tools/bflb_tools")
+    set(FULL_FLASH_TOOL ON)
+    set(BL_FW_POST_PROC ${BL_SDK_BASE}/tools/bflb_tools/bflb_fw_post_proc/bflb_fw_post_proc${TOOL_SUFFIX})
+    set(BL_FW_POST_PROC_CONFIG --chipname=${CHIP} --imgfile=${BIN_FILE} --appkeys=shared)
 
-if(CONFIG_OTA_HEADER_USE_SDK_VERSION)
+    message(STATUS "Use full firmware tool: ${BL_FW_POST_PROC}")
+else()
+    set(FULL_FLASH_TOOL OFF)
+    set(BFLB_IMAGE_TOOL python3 ${BL_SDK_BASE}/tools/bflb_flash/bflb_whole_bin.py)
+    set(BFLB_IMAGE_DIR ${CMAKE_CURRENT_BINARY_DIR}/images)
+
+    message(STATUS "Use simple firmware tool: ${BL_SDK_BASE}/tools/bflb_flash/bflb_whole_bin.py")
+endif()
+
+set(BFLB_BOOT2_FILE ${CONFIG_BOARD_BOOT2FILE})
+set(BFLB_PT_FILE ${CONFIG_BOARD_PTFILE})
+set(BFLB_DTS_FILE ${CONFIG_BOARD_DTSFILE})
+set(BFLB_MFG_FILE)
+
+if(CONFIG_OVERRIDE_BOOT2FILE)
+    set(BFLB_BOOT2_FILE ${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_BOOT2FILE})
+endif()
+
+if(CONFIG_OVERRIDE_PTFILE)
+    set(BFLB_PT_FILE ${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_PTFILE})
+endif()
+
+if(CONFIG_OVERRIDE_DTSFILE)
+    set(BFLB_DTS_FILE ${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_DTSFILE})
+endif()
+
+if(CONFIG_OVERRIDE_MFGFILE)
+    set(BFLB_MFG_FILE ${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_MFGFILE})
+endif()
+
+# Kconfig cannot inspect the filesystem, so board defaults may use a wildcard
+# (for example, config/boot2_*.bin). Resolve it during CMake configuration and
+# fail early when the board image is missing or ambiguous.
+if(BFLB_BOOT2_FILE)
+    if("${BFLB_BOOT2_FILE}" MATCHES "[*?]")
+        file(GLOB BFLB_BOOT2_MATCHES CONFIGURE_DEPENDS LIST_DIRECTORIES false
+            "${BFLB_BOOT2_FILE}")
+        list(LENGTH BFLB_BOOT2_MATCHES BFLB_BOOT2_MATCH_COUNT)
+        if(NOT BFLB_BOOT2_MATCH_COUNT EQUAL 1)
+            string(REPLACE ";" "\n  " BFLB_BOOT2_MATCHES_TEXT
+                "${BFLB_BOOT2_MATCHES}")
+            message(FATAL_ERROR
+                "Boot2 image pattern must match exactly one file:\n"
+                "  ${BFLB_BOOT2_FILE}\n"
+                "Matched ${BFLB_BOOT2_MATCH_COUNT} files:\n"
+                "  ${BFLB_BOOT2_MATCHES_TEXT}")
+        endif()
+        list(GET BFLB_BOOT2_MATCHES 0 BFLB_BOOT2_FILE)
+    elseif(NOT EXISTS "${BFLB_BOOT2_FILE}")
+        message(FATAL_ERROR "Boot2 image does not exist: ${BFLB_BOOT2_FILE}")
+    endif()
+endif()
+
+if(FULL_FLASH_TOOL)
+    # execute_process does not resolve the project's python3.cmd shim on
+    # Windows/CMake 3.25. Use the interpreter selected by the build script.
+    if(DEFINED ENV{PYTHON_EXE} AND EXISTS "$ENV{PYTHON_EXE}")
+        set(FLASH_PYTHON_EXECUTABLE "$ENV{PYTHON_EXE}")
+    else()
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(FLASH_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
+    endif()
+    set(FLASH_PROG_CFG_GENERATOR
+        ${BL_SDK_BASE}/tools/bflb_tools/flash_prog_cfg.py)
+    set(FLASH_PROG_CFG ${CMAKE_CURRENT_BINARY_DIR}/flash_prog_cfg.ini)
+    set(FLASH_PROG_CFG_CMD
+        "${FLASH_PYTHON_EXECUTABLE}" "${FLASH_PROG_CFG_GENERATOR}"
+        --partition-table "${BFLB_PT_FILE}"
+        --output "${FLASH_PROG_CFG}"
+        --application "${BIN_FILE}")
+
+    get_property(FLASH_ERASE GLOBAL PROPERTY SDK_FLASH_ERASE)
+    if("${FLASH_ERASE}" STREQUAL "")
+        set(FLASH_ERASE 1)
+    endif()
+    list(APPEND FLASH_PROG_CFG_CMD --erase "${FLASH_ERASE}")
+
+    if(CONFIG_APP_BUILD_TYPE_STD_APP)
+        list(APPEND FLASH_PROG_CFG_CMD
+            --standard
+            --boot2 "${CMAKE_CURRENT_BINARY_DIR}/build_out/boot2_*.bin"
+            --partition-bin "${CMAKE_CURRENT_BINARY_DIR}/build_out/partition.bin")
+    elseif(NOT CONFIG_APP_BUILD_TYPE_DIRECT_BOOT_APP)
+        message(FATAL_ERROR "Unsupported application build type")
+    endif()
+
+    get_property(FLASH_IMAGES GLOBAL PROPERTY SDK_FLASH_PARTITION_IMAGES)
+    while(FLASH_IMAGES)
+        list(POP_FRONT FLASH_IMAGES FLASH_IMAGE_PARTITION FLASH_IMAGE_FILE)
+        list(APPEND FLASH_PROG_CFG_CMD --image
+            "${FLASH_IMAGE_PARTITION}" "${FLASH_IMAGE_FILE}")
+    endwhile()
+
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${FLASH_PROG_CFG_GENERATOR}" "${BFLB_PT_FILE}")
+    execute_process(
+        COMMAND ${FLASH_PROG_CFG_CMD}
+        RESULT_VARIABLE FLASH_PROG_CFG_RESULT
+        ERROR_VARIABLE FLASH_PROG_CFG_ERROR)
+    if(NOT FLASH_PROG_CFG_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "Failed to generate ${FLASH_PROG_CFG}:\n${FLASH_PROG_CFG_ERROR}")
+    endif()
+endif()
+
+if(FULL_FLASH_TOOL)
+    list(APPEND BL_FW_POST_PROC_CONFIG
+        --boot2file=${BFLB_BOOT2_FILE}
+        --ptfile=${BFLB_PT_FILE}
+        --dtsfile=${BFLB_DTS_FILE})
+    if(BFLB_MFG_FILE)
+        list(APPEND BL_FW_POST_PROC_CONFIG --mfgfile=${BFLB_MFG_FILE})
+    endif()
+endif()
+
+if(FULL_FLASH_TOOL AND CONFIG_OTA_HEADER_USE_SDK_VERSION)
     set(OTA_HEADER_VERSION_PREFIX "EVENT_V")
     if(DEFINED CONFIG_OTA_VERSION_PREFIX)
         set(OTA_HEADER_VERSION_PREFIX "${CONFIG_OTA_VERSION_PREFIX}")
@@ -42,77 +159,80 @@ if(CONFIG_OTA_HEADER_USE_SDK_VERSION)
     list(APPEND BL_FW_POST_PROC_CONFIG --ota_ver_prefix=${OTA_HEADER_VERSION_PREFIX})
 endif()
 
-# fw tools board directory select
-get_property(FW_TOOL_BOARD_DIR GLOBAL PROPERTY FW_TOOL_CUSTOM_BOARD_DIR)
-if(FW_TOOL_BOARD_DIR)
-    message(STATUS "Select FW_TOOL_CUSTOM_BOARD_DIR: ${FW_TOOL_BOARD_DIR}")
-elseif(BOARD_DIR)
-    set(FW_TOOL_BOARD_DIR ${BOARD_DIR}/${BOARD})
-    message(STATUS "Select BOARD_DIR: ${FW_TOOL_BOARD_DIR}")
-else()
-    set(FW_TOOL_BOARD_DIR ${BL_SDK_BASE}/bsp/board/${BOARD})
-    message(STATUS "Select BOARD: ${FW_TOOL_BOARD_DIR}")
-endif()
-# fw tools board config select
-get_property(FW_TOOL_BOARD_CONFIG GLOBAL PROPERTY FW_TOOL_CUSTOM_BOARD_CONFIG)
-if(FW_TOOL_BOARD_CONFIG)
-    message(STATUS "Select FW_TOOL_CUSTOM_BOARD_CONFIG: ${FW_TOOL_BOARD_CONFIG}")
-else()
-    set(FW_TOOL_BOARD_CONFIG config)
-    message(STATUS "Select FW_TOOL_BOARD_CONFIG: ${FW_TOOL_BOARD_CONFIG}")
-endif()
+if(FULL_FLASH_TOOL)
+    if(CONFIG_AES_KEY)
+        list(APPEND BL_FW_POST_PROC_CONFIG --key=${CONFIG_AES_KEY})
+    endif()
 
-if(CONFIG_OVERRIDE_PTFILE)
-    list(APPEND BL_FW_POST_PROC_CONFIG --ptfile=${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_PTFILE})
-endif()
+    if(CONFIG_AES_IV)
+        list(APPEND BL_FW_POST_PROC_CONFIG --iv=${CONFIG_AES_IV})
+    endif()
 
-if(CONFIG_OVERRIDE_DTSFILE)
-    list(APPEND BL_FW_POST_PROC_CONFIG --dtsfile=${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_DTSFILE})
-endif()
+    if(CONFIG_PUBLIC_KEY)
+        list(APPEND BL_FW_POST_PROC_CONFIG --publickey=${CONFIG_PUBLIC_KEY})
+    endif()
 
-if(CONFIG_OVERRIDE_BOOT2FILE)
-    list(APPEND BL_FW_POST_PROC_CONFIG --boot2file=${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_BOOT2FILE})
-endif()
+    if(CONFIG_PRIVATE_KEY)
+        list(APPEND BL_FW_POST_PROC_CONFIG --privatekey=${CONFIG_PRIVATE_KEY})
+    endif()
 
-if(CONFIG_OVERRIDE_MFGFILE)
-    list(APPEND BL_FW_POST_PROC_CONFIG --mfgfile=${SDK_DEMO_PATH}/${CONFIG_OVERRIDE_MFGFILE})
-endif()
-
-# fw tools --brdcfgdir select
-list(APPEND BL_FW_POST_PROC_CONFIG --brdcfgdir=${FW_TOOL_BOARD_DIR}/${FW_TOOL_BOARD_CONFIG})
-
-if(CONFIG_AES_KEY)
-    list(APPEND BL_FW_POST_PROC_CONFIG --key=${CONFIG_AES_KEY})
-endif()
-
-if(CONFIG_AES_IV)
-    list(APPEND BL_FW_POST_PROC_CONFIG --iv=${CONFIG_AES_IV})
-endif()
-
-if(CONFIG_PUBLIC_KEY)
-    list(APPEND BL_FW_POST_PROC_CONFIG --publickey=${CONFIG_PUBLIC_KEY})
-endif()
-
-if(CONFIG_PRIVATE_KEY)
-    list(APPEND BL_FW_POST_PROC_CONFIG --privatekey=${CONFIG_PRIVATE_KEY})
-endif()
-
-if(CONFIG_FW_POST_PROC_CUSTOM)
-    list(APPEND BL_FW_POST_PROC_CONFIG ${CONFIG_FW_POST_PROC_CUSTOM})
+    if(CONFIG_FW_POST_PROC_CUSTOM)
+        string(REGEX REPLACE "^\"|\"$" "" _fw_post_proc_custom "${CONFIG_FW_POST_PROC_CUSTOM}")
+        list(APPEND BL_FW_POST_PROC_CONFIG "${_fw_post_proc_custom}")
+    endif()
 endif()
 
 # POST_PROC combine cmd
 set(combine_cmds)
-list(APPEND combine_cmds COMMAND ${BL_FW_POST_PROC} ${BL_FW_POST_PROC_CONFIG})
+if(CONFIG_SKIP_COMBINE)
+    list(APPEND combine_cmds
+        COMMAND ${CMAKE} -E echo "[fw_post_proc] skipped: raw binary output requested")
+elseif(FULL_FLASH_TOOL)
+    list(APPEND combine_cmds
+        COMMAND ${BL_FW_POST_PROC} ${BL_FW_POST_PROC_CONFIG})
+elseif(CONFIG_APP_BUILD_TYPE_STD_APP)
+    list(APPEND combine_cmds
+        COMMAND ${CMAKE} -E remove_directory ${BFLB_IMAGE_DIR}
+        COMMAND ${BFLB_IMAGE_TOOL} image
+            --app ${BIN_FILE}
+            --boot2 ${BFLB_BOOT2_FILE}
+            --pt ${BFLB_PT_FILE}
+            --dts ${BFLB_DTS_FILE}
+            --output ${BFLB_IMAGE_DIR})
+else(CONFIG_APP_BUILD_TYPE_DIRECT_BOOT_APP)
+    list(APPEND combine_cmds
+        COMMAND ${CMAKE} -E remove_directory ${BFLB_IMAGE_DIR}
+        COMMAND ${CMAKE} -E make_directory ${BFLB_IMAGE_DIR}
+        COMMAND ${CMAKE} -E copy ${BIN_FILE} ${BFLB_IMAGE_DIR}/application@0x0.bin)
+endif()
 add_custom_target(combine WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} ${combine_cmds})
 
 
 # post_build
 set(post_build_cmds)
+if(CONFIG_PSRAM_XIP AND CHIP MATCHES "^(bl616|bl616cl|bl618dg)$" AND NOT CPU_ID STREQUAL "lp")
+    set(MULTI_BINS_VMA_OPTION --vma-auto)
+    if(CHIP STREQUAL "bl618dg" AND CPU_ID STREQUAL "ap")
+        math(EXPR MULTI_BINS_NP_VMA "${CONFIG_PSRAM_ADDRESS} + ${CONFIG_PSRAM_FOR_AP_SIZE}" OUTPUT_FORMAT HEXADECIMAL)
+        math(EXPR MULTI_BINS_PSRAM_END "${CONFIG_PSRAM_ADDRESS} + ${CONFIG_PSRAM_LENGTH}" OUTPUT_FORMAT HEXADECIMAL)
+        list(APPEND MULTI_BINS_VMA_OPTION --vma-limit ${MULTI_BINS_NP_VMA})
+    endif()
+endif()
 if(CONFIG_POST_BUILDS_CONCAT_WITH_LP_FW)
+    # Optional experiment image; leave the SDK's default LPFW binary untouched.
+    if(NOT LPFW_BIN)
+        set(LPFW_BIN ${BL_SDK_BASE}/tools/lpfw/bin/${CHIP}_lp_fw.bin)
+    endif()
     list(APPEND post_build_cmds
         COMMAND ${CMAKE} -E echo "[lp_fw] concate with lp fw bin"
-        COMMAND ${BL_SDK_BASE}/tools/lpfw/patch_lpfw${TOOL_SUFFIX} ${BIN_FILE} ${BL_SDK_BASE}/tools/lpfw/bin/${CHIP}_lp_fw.bin)
+        COMMAND python3 ${BL_SDK_BASE}/tools/byai/multi_bins.py
+	        ${BIN_FILE}
+		--append LPFW
+		${LPFW_BIN}
+		--output ${BIN_FILE}
+	        --align 0x20
+                --sha256-header
+                ${MULTI_BINS_VMA_OPTION})
 endif()
 
 if(CONFIG_POST_BUILDS_GENERATE_ROMFS)
@@ -122,6 +242,10 @@ if(CONFIG_POST_BUILDS_GENERATE_ROMFS)
 endif()
 
 if(CONFIG_DUALCORE_NP_IMAGE)
+    set(MULTI_BINS_NP_VMA_OPTION ${MULTI_BINS_VMA_OPTION})
+    if(CONFIG_PSRAM_XIP AND CHIP STREQUAL "bl618dg" AND CPU_ID STREQUAL "ap")
+        set(MULTI_BINS_NP_VMA_OPTION --vma-start ${MULTI_BINS_NP_VMA} --vma-limit ${MULTI_BINS_PSRAM_END})
+    endif()
     list(APPEND post_build_cmds
         COMMAND ${CMAKE} -E echo "[dualcore] append CONFIG_DUALCORE_NP_IMAGE"
 	COMMAND python3 ${BL_SDK_BASE}/tools/byai/multi_bins.py
@@ -130,6 +254,7 @@ if(CONFIG_DUALCORE_NP_IMAGE)
                 ${CMAKE_CURRENT_BINARY_DIR}/${CONFIG_DUALCORE_NP_IMAGE}
 		--output ${BIN_FILE}
                 --align 0x400
+                ${MULTI_BINS_NP_VMA_OPTION}
         )
 endif()
 
@@ -142,6 +267,7 @@ if(CONFIG_THIRDCORE_LP_IMAGE)
                 ${CMAKE_CURRENT_BINARY_DIR}/${CONFIG_THIRDCORE_LP_IMAGE}
 		--output ${BIN_FILE}
                 --align 0x400
+                ${MULTI_BINS_VMA_OPTION}
         )
 endif()
 
@@ -161,6 +287,7 @@ if(CONFIG_BACKTRACE)
             ${CMAKE_CURRENT_BINARY_DIR}/build_out/dwarfcfi.bin
             --output ${BIN_FILE}
             --align 0x1000
+            ${MULTI_BINS_VMA_OPTION}
         #COMMAND ${CMAKE} -E echo "  [done] DWARFCFI embedded successfully"
         )
 endif()
@@ -181,6 +308,7 @@ if(CONFIG_X509_CERTIFICATE_BUNDLE)
             ${CMAKE_CURRENT_BINARY_DIR}/build_out/x509_crt_bundle
             --output ${BIN_FILE}
             --align 0x1000
+            ${MULTI_BINS_VMA_OPTION}
         )
 endif()
 
@@ -193,6 +321,7 @@ if(CONFIG_SHELL AND CONFIG_SHELL_AUTOLIST_FILE)
             ${CONFIG_SHELL_AUTOLIST_FILE}
             --output ${BIN_FILE}
             --align 0x100
+            ${MULTI_BINS_VMA_OPTION}
     )
 endif()
 

@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
 
   agent_get_local_description(&agent, local_description + strlen(local_description), sizeof(local_description));
 
-  base64_encode(local_description, strlen(local_description), local_description_base64, sizeof(local_description_base64));
+  libpeer_base64_encode(local_description, strlen(local_description), local_description_base64, sizeof(local_description_base64));
 
   printf("Local description: \n%s\n", local_description);
 
@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
 
   scanf("%s", remote_description_base64);
 
-  base64_decode(remote_description_base64, strlen(remote_description_base64), remote_description, sizeof(remote_description));
+  libpeer_base64_decode(remote_description_base64, strlen(remote_description_base64), remote_description, sizeof(remote_description));
 
   printf("Remote description: \n%s", remote_description);
 

@@ -5,7 +5,19 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+/*
+ * The scan-result tree layout must be identical across every translation
+ * unit that dereferences struct wl80211_scan_result_item.  NuttX's
+ * <sys/tree.h> RB_ENTRY (three pointers plus an int color, 16 bytes)
+ * differs from the tree.h this component is built with in its native
+ * environment (rbe_link[3], 12 bytes), so the vendored tree.h is included
+ * unconditionally.  <sys/queue.h> stays per-environment for plain lists.
+ */
+#ifdef __NuttX__
+#include <sys/queue.h>
+#else
 #include "queue/queue.h"
+#endif
 #include "tree/tree.h"
 
 //#define INVARIANTS
@@ -254,20 +266,6 @@ enum wl80211_p2p_role {
     WL80211_P2P_ROLE_GO,
 };
 
-enum wl80211_p2p_action_kind {
-    WL80211_P2P_ACTION_NONE = 0,
-    WL80211_P2P_ACTION_PUBLIC,
-    WL80211_P2P_ACTION_VENDOR,
-};
-
-struct wl80211_p2p_action_info {
-    uint8_t category;
-    uint8_t action;
-    uint8_t kind;
-    const uint8_t *payload;
-    uint32_t payload_len;
-};
-
 struct wl80211_p2p_group_state {
     uint8_t peer_dev_addr[6];
     uint8_t go_dev_addr[6];
@@ -325,10 +323,11 @@ struct wl80211_global_state {
     /* station max idle time before send deauth (x5 seconds) */
     uint16_t ap_max_idle_time;
     struct aid_list_entry aid_list[4];
+    uint8_t assoc_sta_count;
+
 #if defined(CONFIG_WL80211_P2P)
     struct wl80211_p2p_state p2p;
 #endif
-    uint8_t assoc_sta_count;
 };
 extern struct wl80211_global_state wl80211_glb;
 
@@ -353,9 +352,6 @@ int wl80211_unregister_input_cb(void);
 #if defined(CONFIG_WL80211_P2P)
 int wl80211_register_mgmt_rx_cb(wl80211_mgmt_rx_cb_t cb, void *prv);
 int wl80211_unregister_mgmt_rx_cb(void);
-#endif
-#if defined(CONFIG_WL80211_P2P)
-bool wl80211_p2p_parse_action_frame(const uint8_t *frame, uint32_t frame_len, struct wl80211_p2p_action_info *info);
 #endif
 
 enum {

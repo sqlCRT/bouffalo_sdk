@@ -21,26 +21,30 @@
 #include "board.h"
 #include "bl616_tzc_sec.h"
 
+#include <time.h>
+
 #include "bl616_glb.h"
 
 #include "board_flash_psram.h"
 
 #include "mm.h"
+#if defined(CONFIG_PSRAM) || defined(CONFIG_PSRAM_XIP)
+#include "psram_heap_init.h"
+#endif
 
 extern void log_start(void);
 
 extern uint32_t __HeapBase;
 extern uint32_t __HeapLimit;
-extern uint32_t __psram_heap_base;
-extern uint32_t __psram_limit;
-
-extern uint32_t __psram_data_start__;
-extern uint32_t __psram_data_end__;
-extern uint32_t __psram_noinit_data_start__;
-extern uint32_t __psram_noinit_data_end__;
 
 extern uint32_t _heap_wifi_start;
 extern uint32_t _heap_wifi_size;
+
+static const uint32_t any_alloc_order[] = {
+    MM_HEAP_OCRAM_0,
+    MM_HEAP_PSRAM_0,
+    MM_HEAP_WRAM_0,
+};
 
 #if (defined(CONFIG_LUA) || defined(CONFIG_BFLB_LOG) || defined(CONFIG_FATFS))
 static struct bflb_device_s *rtc;
@@ -69,7 +73,7 @@ static void ATTR_CLOCK_SECTION __attribute__((noinline)) system_clock_init(void)
 #endif
 }
 
-#ifndef LP_APP
+#ifndef CONFIG_LPAPP
 static void peripheral_clock_init(void)
 {
     PERIPHERAL_CLOCK_ADC_DAC_ENABLE();
@@ -150,7 +154,6 @@ static void peripheral_clock_init_lp(void)
     tmpVal = 0;
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S2_WIFI, 1);         // ungate wifi
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_EMI_MISC, 1); // ungate emi_misc
-    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_PIO, 1);      // ungate pec
 
     // tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_DMA2, 1); // ungate dma2
     // tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S1_EXT_EMAC, 1); // ungate emac
@@ -166,6 +169,16 @@ static void peripheral_clock_init_lp(void)
     // tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_CGEN_S3_BT_BLE, 1); // ungate bt_ble
 
     BL_WR_REG(GLB_BASE, GLB_CGEN_CFG2, tmpVal);
+
+#ifdef CONFIG_PSRAM
+#ifdef CONFIG_PSRAM_RETENTION
+    /* PSRAMB register transactions need the controller bus clock as well as
+     * the memory clock. LP clock setup clears CGEN_CFG2, including bit 18.
+     * The SDK names that gate PSRAM1_CTRL; keep it on at boot AND recovery.
+     * Do not reset/reinitialize PSRAM: retained data must remain untouched. */
+    GLB_PER_Clock_UnGate(GLB_AHB_CLOCK_PSRAM1_CTRL);
+#endif
+#endif
 
     GLB_Set_UART_CLK(ENABLE, HBN_UART_CLK_XCLK, 0);
 
@@ -338,7 +351,7 @@ static void console_init()
 }
 #endif
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 void board_recovery(void)
 {
 #ifdef CONF_PSRAM_RESTORE
@@ -382,32 +395,18 @@ void ram_heap_init(void)
         puts("psram init fail !!!\r\n");
         while (1) {}
     }
-
-    /* psram heap init */
-    heap_len = ((size_t)&__psram_limit - (size_t)&__psram_heap_base);
-#ifndef CONFIG_PSRAM_SKIP_REGISTER_HEAP
-    mm_register_heap(MM_HEAP_PSRAM_0, "PSRAM", MM_ALLOCATOR_TLSF, &__psram_heap_base, heap_len);
 #endif
-
-    /* ram info dump */
-    printf("dynamic memory init success\r\n"
-           "  ocram heap size: %d Kbyte, \r\n"
-           "  psram heap size: %d Kbyte\r\n",
-           ((size_t)&__HeapLimit - (size_t)&__HeapBase) / 1024,
-           ((size_t)&__psram_limit - (size_t)&__psram_heap_base) / 1024);
-
-#else
-    /* check psram data */
-    if (&__psram_data_end__ - &__psram_data_start__ > 0 || &__psram_noinit_data_end__ - &__psram_noinit_data_start__ > 0) {
-        puts("psram data already exists, please enable CONFIG_PSRAM\r\n");
-        while (1) {}
-    }
 
     /* ram info dump */
     printf("dynamic memory init success\r\n"
            "  ocram heap size: %d Kbyte \r\n",
            ((size_t)&__HeapLimit - (size_t)&__HeapBase) / 1024);
-#endif
+
+}
+
+enum bflb_rtc_32k_clk_type board_get_rtc_32k_clk_type(void)
+{
+    return BFLB_RTC_32K_CLK_RC;
 }
 
 void board_init(void)
@@ -432,7 +431,9 @@ void board_init(void)
     /* system clock */
     system_clock_init();
 
-#ifndef LP_APP
+    bflb_rtc_init(NULL, board_get_rtc_32k_clk_type());
+
+#ifndef CONFIG_LPAPP
     peripheral_clock_init();
 #else
     peripheral_clock_init_lp();
@@ -455,6 +456,10 @@ void board_init(void)
 
     /* ram and heap init (including psram) */
     ram_heap_init();
+#if defined(CONFIG_PSRAM) || defined(CONFIG_PSRAM_XIP)
+    ram_psram_heap_init();
+#endif
+    mm_heap_set_any_alloc_order(any_alloc_order, sizeof(any_alloc_order) / sizeof(any_alloc_order[0]));
 
     /* boot info dump */
 #ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
@@ -620,7 +625,7 @@ static void mfg_cmd(int argc, char **argv)
 }
 SHELL_CMD_EXPORT_ALIAS(mfg_cmd, mfg, mfg);
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 #include "bl_lp.h"
 
 static void test_io_wakeup_status(uint8_t io_num)
@@ -760,7 +765,7 @@ void cmd_acomp_test(char *buf, int len, int argc, char **argv)
 }
 SHELL_CMD_EXPORT_ALIAS(cmd_io_test, io_test, cmd io_test);
 SHELL_CMD_EXPORT_ALIAS(cmd_acomp_test, acomp_test, cmd acomp_test);
-#endif /* LP_APP */
+#endif /* CONFIG_LPAPP */
 
 #endif /* CONFIG_SHELL */
 

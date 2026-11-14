@@ -6,6 +6,7 @@
 
 #include "audio_codec_driver.h"
 #include "audio_codec_ac101s.h"
+#include "audio_codec_acm8852.h"
 #include "audio_codec_es8311.h"
 #include "audio_codec_es8389.h"
 #include "audio_codec_es8388.h"
@@ -31,6 +32,7 @@ static const audio_codec_driver_t *g_drivers[] = {
     &audio_codec_es8388_driver,
     &audio_codec_wm8978_driver,
     &audio_codec_ac101s_driver,
+    &audio_codec_acm8852_driver,
 };
 
 static void audio_codec_reset_dev(audio_codec_dev_t *dev)
@@ -156,6 +158,29 @@ int audio_codec_set_mic_pga(audio_codec_dev_t *dev, int pga_percent)
         return -2;
     }
 
+    return drv->set_mic_pga(dev, pga_percent);
+}
+
+int audio_codec_set_mic_pga_channel(audio_codec_dev_t *dev,
+                                    audio_codec_channel_t channel,
+                                    int pga_percent)
+{
+    const audio_codec_driver_t *drv;
+
+    if (dev == NULL ||
+        (channel != AUDIO_CODEC_CHANNEL_LEFT && channel != AUDIO_CODEC_CHANNEL_RIGHT)) {
+        return -1;
+    }
+    drv = (const audio_codec_driver_t *)dev->drv;
+    if (drv == NULL) {
+        return -2;
+    }
+    if (drv->set_mic_pga_channel != NULL) {
+        return drv->set_mic_pga_channel(dev, channel, pga_percent);
+    }
+    if (drv->set_mic_pga == NULL) {
+        return -2;
+    }
     return drv->set_mic_pga(dev, pga_percent);
 }
 

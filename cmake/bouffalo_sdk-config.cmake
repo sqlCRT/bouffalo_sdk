@@ -16,15 +16,8 @@ set(PROJECT_BINARY_DIR ${build_dir})
 set(EXECUTABLE_OUTPUT_PATH ${build_dir})
 set(LIBRARY_OUTPUT_PATH ${PROJECT_BINARY_DIR}/lib)
 
-include(${CMAKE_CURRENT_BINARY_DIR}/generated/defconfig.cmake)
-
-# menuconfig output has the highest priority: it overrides the Make variables
-# exported above.  Register it as a configure dependency so saving a new
-# configuration triggers a CMake re-run even though the file is optional.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SDK_DEMO_PATH}/.config.cmake")
-if(EXISTS "${SDK_DEMO_PATH}/.config.cmake")
-    include("${SDK_DEMO_PATH}/.config.cmake")
-endif()
+include(${CMAKE_CURRENT_BINARY_DIR}/generated/autoconfig.cmake)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_library(sdk_intf_lib INTERFACE)
 add_library(app STATIC)
@@ -42,8 +35,6 @@ endif()
 include(${BL_SDK_BASE}/cmake/toolchain.cmake)
 include(${BL_SDK_BASE}/cmake/extension.cmake)
 include(${BL_SDK_BASE}/cmake/compiler_flags.cmake)
-
-sdk_add_compile_definitions_ifdef(CONFIG_LPAPP -DLP_APP)
 
 enable_language(C CXX ASM)
 

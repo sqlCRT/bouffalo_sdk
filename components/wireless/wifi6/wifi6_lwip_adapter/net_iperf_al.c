@@ -38,7 +38,7 @@
 
 #include <assert.h>
 #undef TRACE_APP
-#define TRACE_APP(err, ...) {printf(__VA_ARGS__); assert(0);}
+#define TRACE_APP(err, ...) do { printf(__VA_ARGS__); } while (0)
 
 #define co_ntohs ntohs
 #define co_htons htons
@@ -46,6 +46,37 @@
 #define co_htonl htonl
 
 int net_if_get_ip(net_al_if_t net_if, uint32_t *ip, uint32_t *mask, uint32_t *gw);
+
+static int iperf_vif_ipv4(uint16_t vif, uint32_t *ip)
+{
+    net_al_if_t n = fhost_to_net_if(vif);
+    uint32_t mask = 0;
+
+    if (!n || !ip) {
+        return -1;
+    }
+    net_if_get_ip(n, ip, &mask, NULL);
+    return *ip ? 0 : -1;
+}
+
+/* Use the requested vif when it has IPv4; otherwise the other vif. */
+static uint16_t iperf_auto_vif(uint16_t requested, uint32_t *ip)
+{
+    uint16_t other;
+
+    if (iperf_vif_ipv4(requested, ip) == 0) {
+        return requested;
+    }
+    other = (requested == (uint16_t)MGMR_VIF_STA) ?
+            (uint16_t)MGMR_VIF_AP : (uint16_t)MGMR_VIF_STA;
+    if (iperf_vif_ipv4(other, ip) == 0) {
+        fhost_printf("iperf: vif %u has no IPv4, auto vif %u\r\n",
+                     requested, other);
+        return other;
+    }
+    *ip = 0;
+    return requested;
+}
 
 /*
  * DEFINITIONS
@@ -1409,11 +1440,9 @@ static err_t net_iperf_pcb_config(void *pcb, struct fhost_iperf_stream *stream)
 
     if (settings->flags.is_server)
     {
-        net_al_if_t n = fhost_to_net_if(settings->vif_num);
-        uint32_t mask;
+        uint16_t vif = iperf_auto_vif(settings->vif_num, &ip);
 
-        // Bind Server IP address and port to pcb
-        net_if_get_ip(n, &ip, &mask, NULL);
+        stream->iperf_settings.vif_num = vif;
         ip_addr_set_ip4_u32_val(lip,  ip);
         if (settings->flags.is_udp)
         {
@@ -1494,7 +1523,7 @@ static err_t net_iperf_pcb_config(void *pcb, struct fhost_iperf_stream *stream)
  **/
 static void* net_iperf_init(struct fhost_iperf_stream* stream)
 {
-    void* pcb;
+    void* pcb = NULL;
 
     // For client ensure that server is reachable first
     if (!stream->iperf_settings.flags.is_server)
@@ -1504,31 +1533,64 @@ static void* net_iperf_init(struct fhost_iperf_stream* stream)
         struct netif *netif;
         const ip4_addr_t *ip_ret;
         ip_addr_t rip;
+        ip4_addr_t arp_ip;
+        char ip_str[IP4ADDR_STRLEN_MAX];
+        err_t arp_err;
 
         ip = stream->iperf_settings.host_ip;
         ip_addr_set_ip4_u32_val(rip,  ip);
+        ip4addr_ntoa_r(ip_2_ip4(&rip), ip_str, sizeof(ip_str));
 
         /* Don't call ip_route() with IP_ANY_TYPE */
         LOCK_TCPIP_CORE();
         netif = ip4_route_src(ip_2_ip4(IP46_ADDR_ANY(IP_GET_TYPE(&rip))), ip_2_ip4(&rip));
-        UNLOCK_TCPIP_CORE();
         if (netif == NULL)
+        {
+            UNLOCK_TCPIP_CORE();
+            fhost_printf("IPERF: no route to host %s\r\n", ip_str);
             return NULL;
+        }
 
-        found = (etharp_find_addr(netif, ip_2_ip4(&rip), &eth_ret, &ip_ret) != -1);
+        /* ARP resolves the next hop. Use the configured gateway for off-link destinations. */
+        arp_ip = *ip_2_ip4(&rip);
+        if (!ip4_addr_netcmp(&arp_ip, netif_ip4_addr(netif), netif_ip4_netmask(netif)) &&
+            !ip4_addr_islinklocal(&arp_ip))
+        {
+            if (ip4_addr_isany(netif_ip4_gw(netif)))
+            {
+                UNLOCK_TCPIP_CORE();
+                fhost_printf("IPERF: no gateway for host %s\r\n", ip_str);
+                return NULL;
+            }
+            arp_ip = *netif_ip4_gw(netif);
+        }
+
+        found = (etharp_find_addr(netif, &arp_ip, &eth_ret, &ip_ret) != -1);
+        UNLOCK_TCPIP_CORE();
         while (!found && tries < 3)
         {
             LOCK_TCPIP_CORE();
-            etharp_request(netif, ip_2_ip4(&rip));
+            arp_err = etharp_request(netif, &arp_ip);
             UNLOCK_TCPIP_CORE();
+
+            if (arp_err != ERR_OK)
+            {
+                fhost_printf("IPERF: ARP request for host %s failed (%d)\r\n", ip_str, arp_err);
+                return NULL;
+            }
 
             // It is not possible to use a callback for the ARP reply, set a timeout
             rtos_task_suspend(ARP_REPLY_TO);
             tries++;
-            found = (etharp_find_addr(netif, ip_2_ip4(&rip), &eth_ret, &ip_ret) != -1);
+            LOCK_TCPIP_CORE();
+            found = (etharp_find_addr(netif, &arp_ip, &eth_ret, &ip_ret) != -1);
+            UNLOCK_TCPIP_CORE();
         }
         if (!found)
+        {
+            fhost_printf("IPERF: ARP timeout for host %s\r\n", ip_str);
             return NULL;
+        }
     }
 
     LOCK_TCPIP_CORE();
@@ -1558,7 +1620,10 @@ static void* net_iperf_init(struct fhost_iperf_stream* stream)
     if (net_iperf_pcb_config(pcb, stream) != ERR_OK)
     {
         if (stream->iperf_settings.flags.is_udp)
+        {
             udp_remove(pcb);
+            stream->arg = NULL;
+        }
         else
             tcp_close(pcb);
         pcb = NULL;
@@ -1574,9 +1639,6 @@ int net_iperf_udp_server_run(struct fhost_iperf_stream* stream)
     int ret = -1;
     struct udp_pcb * pcb = NULL;
 
-    if (net_iperf_buf_init(stream, true)) {
-        goto exit;
-    }
     pcb = net_iperf_init(stream);
     if (pcb == NULL)
     {
@@ -1605,9 +1667,7 @@ cleanup:
         udp_remove(pcb);
         UNLOCK_TCPIP_CORE();
     }
-    net_iperf_buf_deinit(stream);
 
-exit:
     return ret;
 }
 
@@ -1956,6 +2016,7 @@ exit:
 int net_iperf_tcp_server_run(struct fhost_iperf_stream* stream)
 {
     struct tcp_pcb *pcb;
+    struct tcp_pcb *listen_pcb;
 
     // Create and configure TCP Protocol Control Block
     pcb = net_iperf_init(stream);
@@ -1967,14 +2028,15 @@ int net_iperf_tcp_server_run(struct fhost_iperf_stream* stream)
 
     LOCK_TCPIP_CORE();
     // Listening for TCP clients to connect
-    pcb = tcp_listen_with_backlog(pcb, 1);
-    if (pcb == NULL)
+    listen_pcb = tcp_listen_with_backlog(pcb, 1);
+    if (listen_pcb == NULL)
     {
-        fhost_printf("IPERF: Server pcb is NULLs\n");
+        fhost_printf("IPERF: failed to allocate TCP listen pcb\n");
         tcp_close(pcb);
         UNLOCK_TCPIP_CORE();
         return -1;
     }
+    pcb = listen_pcb;
 
     // Register argument for acceptance callback
     tcp_arg(pcb, stream);
@@ -2039,7 +2101,7 @@ Client/Server:\r\n\
   -l, --len       #[KM]    length of buffer to read or write (default 8 KB)\r\n\
   -p, --port      #        server port to listen on/connect to\r\n\
   -u, --udp                use UDP rather than TCP\r\n\
-  -I              #        vif number, 0 for sta, 1 for ap, default is 0\r\n\r\n\
+  -I              #        vif number, 0=sta 1=ap; omit to auto-select (STA, else AP/P2P if STA has no IPv4)\r\n\r\n\
 Client specific:\r\n\
   -b, --bandwidth #[KM]    for UDP, bandwidth to send at in bits/sec\r\n\
                          (default 1 Mbit/sec, implies -u)\r\n\
@@ -2102,7 +2164,7 @@ static RTOS_TASK_FCT(fhost_iperf_main)
             // UDP Server
             if (net_iperf_udp_server_run(iperf_stream))
             {
-                TRACE_APP(ERR, "IPERF : Failed to start UDP server");
+                fhost_printf("IPERF : Failed to start UDP server\r\n");
                 goto end;
             }
         }

@@ -56,6 +56,10 @@ int rpmsg_rpc_client_send(struct rpmsg_rpc_clt *rpc,
 	if (!rpc)
 		return -EINVAL;
 
+	/* Keep the RPC ID and parameters inside the fixed-size stack buffer. */
+	if (req_param_size > (MAX_BUF_LEN - MAX_FUNC_ID_LEN))
+		return -EINVAL;
+
 	/* to optimize with the zero copy API */
 	memcpy(tmpbuf, &rpc_id, MAX_FUNC_ID_LEN);
 	memcpy(&tmpbuf[MAX_FUNC_ID_LEN], request_param, req_param_size);

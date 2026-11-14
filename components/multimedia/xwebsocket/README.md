@@ -1,11 +1,32 @@
-# librws -  Tiny, cross platform websocket client C library. 
+# xwebsocket (librws)
+
+English | [简体中文](README_CN.md)
 
 [![Platform](https://img.shields.io/cocoapods/p/librws.svg?style=flat)](http://cocoapods.org/pods/librws)
 [![Version](https://img.shields.io/cocoapods/v/librws.svg?style=flat)](http://cocoapods.org/pods/librws)
 [![License](https://img.shields.io/cocoapods/l/librws.svg?style=flat)](http://cocoapods.org/pods/librws)
-[![Build Status](https://travis-ci.org/OlehKulykov/librws.svg?branch=master)](https://travis-ci.org/OlehKulykov/librws) 
+[![Build Status](https://travis-ci.org/OlehKulykov/librws.svg?branch=master)](https://travis-ci.org/OlehKulykov/librws)
 [![Build status](https://ci.appveyor.com/api/projects/status/9f8032rmlbrtaa9o?svg=true)](https://ci.appveyor.com/project/OlehKulykov/librws)
 
+
+## SDK Integration
+
+This component ports the librws WebSocket client to the SDK. Enable
+`CONFIG_MULTIMEDIA=y` and `CONFIG_XWEBSOCKET=y`, then provide networking and POSIX
+threads/mutexes for [src/port/rws_thread.c](src/port/rws_thread.c).
+The public interface is [include/librws.h](include/librws.h).
+CMake builds the SDK component; the CocoaPods instructions below describe upstream use.
+
+Set the scheme, host, port, path, and callbacks before connecting. Register the
+required disconnect callback. Text/binary receive callbacks include a
+`bool is_finished` argument for message fragments; payloads have an explicit
+length and need not be null-terminated. Keep callbacks short because they run
+in the socket processing context. Release the socket with
+`rws_socket_disconnect_and_release()` and stop using its handle.
+
+See [xrecord](../xrecord/README.md) for streaming integration and the
+[multimedia guide](../README.md) for dependencies. Connection failures should be
+reported through `rws_socket_get_error()` in the disconnect callback.
 
 ### Features
 * No additional dependecies
@@ -46,8 +67,8 @@ Warning: ```rws_socket_set_on_disconnected``` is required
 static void on_socket_disconnected(rws_socket socket) {
   // process error
   rws_error error = rws_socket_get_error(socket);
-  if (error) { 
-    printf("\nSocket disconnect with code, error: %i, %s", rws_error_get_code(error), rws_error_get_description(error)); 
+  if (error) {
+    printf("\nSocket disconnect with code, error: %i, %s", rws_error_get_code(error), rws_error_get_description(error));
   }
   // forget about this socket object, due to next disconnection sequence
   _socket = NULL;
@@ -57,8 +78,11 @@ static void on_socket_connected(rws_socket socket) {
   printf("\nSocket connected");
 }
 // callback trigered on socket received text
-static void on_socket_received_text(rws_socket socket, const char * text, const unsigned int length) {
-  printf("\nSocket text: %s", text);
+static void on_socket_received_text(rws_socket socket, const char * text,
+                                    const unsigned int length, bool is_finished) {
+  (void)socket;
+  (void)is_finished;
+  printf("\nSocket text: %.*s", (int)length, text);
 }
 ..................
 // Set socket callbacks

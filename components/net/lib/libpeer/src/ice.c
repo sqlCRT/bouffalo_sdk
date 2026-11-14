@@ -48,20 +48,30 @@ void ice_candidate_create(IceCandidate* candidate, int foundation, IceCandidateT
 
 void ice_candidate_to_description(IceCandidate* candidate, char* description, int length) {
   char addr_string[ADDRSTRLEN];
+  char raddr_str[ADDRSTRLEN];
   char typ_raddr[128];
 
   memset(typ_raddr, 0, sizeof(typ_raddr));
-  addr_to_string(&candidate->raddr, addr_string, sizeof(addr_string));
+  addr_to_string(&candidate->raddr, raddr_str, sizeof(raddr_str));
 
   switch (candidate->type) {
     case ICE_CANDIDATE_TYPE_HOST:
       snprintf(typ_raddr, sizeof(typ_raddr), "host");
       break;
     case ICE_CANDIDATE_TYPE_SRFLX:
-      snprintf(typ_raddr, sizeof(typ_raddr), "srflx raddr %s rport %d", addr_string, candidate->raddr.port);
+      if (candidate->raddr.port != 0 && candidate->raddr.sin.sin_addr.s_addr != 0) {
+        snprintf(typ_raddr, sizeof(typ_raddr), "srflx raddr %s rport %d", raddr_str, candidate->raddr.port);
+      } else {
+        snprintf(typ_raddr, sizeof(typ_raddr), "srflx");
+      }
       break;
     case ICE_CANDIDATE_TYPE_RELAY:
-      snprintf(typ_raddr, sizeof(typ_raddr), "relay raddr %s rport %d", addr_string, candidate->raddr.port);
+      if (candidate->raddr.port != 0 && candidate->raddr.sin.sin_addr.s_addr != 0) {
+        snprintf(typ_raddr, sizeof(typ_raddr), "relay raddr %s rport %d", raddr_str, candidate->raddr.port);
+      } else {
+        snprintf(typ_raddr, sizeof(typ_raddr), "relay");
+      }
+      break;
     default:
       break;
   }
@@ -77,20 +87,42 @@ void ice_candidate_to_description(IceCandidate* candidate, char* description, in
            typ_raddr);
 }
 
-int ice_candidate_from_description(IceCandidate* candidate, char* description, char* end) {
-  char* candidate_start = description;
+int ice_candidate_from_description(IceCandidate* candidate, const char* description,
+                                   const char* end) {
+  char line[512];
+  const char* candidate_start;
+  size_t line_len;
   uint32_t port;
   char type[16];
   char addrstring[ADDRSTRLEN];
 
-  if (strncmp("a=", candidate_start, strlen("a=")) == 0) {
-    candidate_start += strlen("a=");
+  if (!candidate || !description || !end || end < description) {
+    return -1;
+  }
+
+  line_len = (size_t)(end - description);
+  if (line_len == 0 || line_len >= sizeof(line)) {
+    LOGE("ICE candidate line is empty or too long");
+    return -1;
+  }
+
+  memcpy(line, description, line_len);
+  line[line_len] = '\0';
+  candidate_start = line;
+
+  if (strncmp("a=", candidate_start, 2) == 0) {
+    candidate_start += 2;
+  }
+  if (strncmp("candidate:", candidate_start, strlen("candidate:")) != 0) {
+    return -1;
   }
   candidate_start += strlen("candidate:");
 
+  memset(candidate, 0, sizeof(*candidate));
+
   // a=candidate:448736988 1 udp 2122260223 172.17.0.1 49250 typ host generation 0 network-id 1 network-cost 50
   // a=candidate:udpcandidate 1 udp 120 192.168.1.102 8000 typ host
-  if (sscanf(candidate_start, "%s %d %s %" PRIu32 " %s %" PRIu32 " typ %s",
+  if (sscanf(candidate_start, "%32s %d %32s %" SCNu32 " %45s %" SCNu32 " typ %15s",
              candidate->foundation,
              &candidate->component,
              candidate->transport,
@@ -102,25 +134,28 @@ int ice_candidate_from_description(IceCandidate* candidate, char* description, c
     return -1;
   }
 
-  if (strncmp(candidate->transport, "UDP", 3) != 0 && strncmp(candidate->transport, "udp", 3) != 0) {
+  if (strcmp(candidate->transport, "UDP") != 0 && strcmp(candidate->transport, "udp") != 0) {
     LOGE("Only UDP transport is supported");
     return -1;
   }
 
-  if (strncmp(type, "host", 4) == 0) {
+  if (strcmp(type, "host") == 0) {
     candidate->type = ICE_CANDIDATE_TYPE_HOST;
-  } else if (strncmp(type, "srflx", 5) == 0) {
+  } else if (strcmp(type, "srflx") == 0) {
     candidate->type = ICE_CANDIDATE_TYPE_SRFLX;
-  } else if (strncmp(type, "relay", 5) == 0) {
+  } else if (strcmp(type, "relay") == 0) {
     candidate->type = ICE_CANDIDATE_TYPE_RELAY;
   } else {
     LOGE("Unknown candidate type: %s", type);
     return -1;
   }
 
-  addr_set_port(&candidate->addr, port);
+  if (port == 0 || port > UINT16_MAX) {
+    LOGE("Invalid ICE candidate port: %" PRIu32, port);
+    return -1;
+  }
 
-  if (strstr(addrstring, "local") != NULL) {
+  if (strstr(addrstring, ".local") != NULL) {
     if (mdns_resolve_addr(addrstring, &candidate->addr) == 0) {
       LOGW("Failed to resolve mDNS address");
       return -1;
@@ -128,6 +163,8 @@ int ice_candidate_from_description(IceCandidate* candidate, char* description, c
   } else if (addr_from_string(addrstring, &candidate->addr) == 0) {
     return -1;
   }
+
+  addr_set_port(&candidate->addr, (uint16_t)port);
 
   return 0;
 }

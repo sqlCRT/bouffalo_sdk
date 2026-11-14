@@ -1,6 +1,13 @@
 #ifndef _BOARD_GPIO_H_
 #define _BOARD_GPIO_H_
 
+#if defined(CONFIG_BSP_LED_MATRIX)
+#include "bflb_led_matrix.h"
+
+/** @brief Return the board-specific LED matrix wiring configuration. */
+const led_matrix_gpio_config_t *board_led_matrix_gpio_config_get(void);
+#endif
+
 #if __has_include("board_gpio_overlay.h")
 #include "board_gpio_overlay.h"
 #else

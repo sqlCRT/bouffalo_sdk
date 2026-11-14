@@ -1,6 +1,8 @@
 
 sdk_generate_library()
 
+sdk_add_compile_definitions(-DRPMSG_BUFFER_SIZE=${CONFIG_OPENAMP_RPMSG_BUFFER_SIZE})
+
 sdk_library_add_sources(open-amp/lib/version.c)
 sdk_library_add_sources(open-amp/lib/virtio/virtio.c)
 sdk_library_add_sources(open-amp/lib/virtio/virtqueue.c)
@@ -19,6 +21,11 @@ if(CONFIG_OPENAMP_PROXY)
     message(STATUS "OpenAMP: rpmsg_retarget.c enabled")
 else()
     message(STATUS "OpenAMP: rpmsg_retarget.c disabled to avoid C library conflicts")
+endif()
+
+if(CONFIG_SOCKET_OFFLOAD AND NOT CONFIG_OPENAMP_PROXY)
+    sdk_library_add_sources(open-amp/lib/service/rpmsg/rpc/rpmsg_rpc_client.c
+                            open-amp/lib/service/rpmsg/rpc/rpmsg_rpc_server.c)
 endif()
 
 if(CONFIG_OPENAMP_VIRTIO_MMIO_DRV)

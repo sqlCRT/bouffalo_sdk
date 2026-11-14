@@ -9,6 +9,7 @@
 
 #if defined(CONFIG_NETHUB_LOWPOWER_ENABLE)
 #include "mr_sdio_drv.h"
+#include "task.h"
 #endif
 
 #define DBG_TAG "NETHUB_SDIO"
@@ -61,12 +62,31 @@ static bool transport_sdio_lp_is_idle(void)
 
 static int transport_sdio_lp_prepare(void)
 {
-    return mr_sdio_drv_lowpower_prepare();
+    int ret;
+
+    if (g_msg_sdio_ctrl == NULL || g_msg_sdio_ctrl->msg_proc_task == NULL) {
+        return -1;
+    }
+
+    mr_msg_ctrl_keepalive_pause(g_msg_sdio_ctrl);
+    vTaskSuspend(g_msg_sdio_ctrl->msg_proc_task);
+    ret = mr_sdio_drv_lowpower_prepare();
+    if (ret != 0) {
+        vTaskResume(g_msg_sdio_ctrl->msg_proc_task);
+        mr_msg_ctrl_keepalive_resume(g_msg_sdio_ctrl);
+    }
+    return ret;
 }
 
 static int transport_sdio_lp_resume(void)
 {
-    return mr_sdio_drv_lowpower_restore();
+    int ret = mr_sdio_drv_lowpower_restore();
+
+    if (ret == 0) {
+        vTaskResume(g_msg_sdio_ctrl->msg_proc_task);
+        mr_msg_ctrl_keepalive_resume(g_msg_sdio_ctrl);
+    }
+    return ret;
 }
 #endif
 

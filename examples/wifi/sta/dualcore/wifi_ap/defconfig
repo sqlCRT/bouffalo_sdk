@@ -1,5 +1,4 @@
-CONFIG_NEWLIB               =n
-CONFIG_NEWLIB_STANDARD      =n
+-include $(BL_SDK_BASE)/examples/wifi/sta/dualcore/defconfig
 
 CONFIG_VSNPRINTF_NANO       =n
 CONFIG_VSNPRINTF_FLOAT      =y
@@ -12,6 +11,7 @@ CONFIG_BFLB_MTD              =y
 CONFIG_PARTITION             =y
 CONFIG_FOTA                  =y
 CONFIG_BFLB_LOG              =n
+CONFIG_LOG_LEVEL             =4
 CONFIG_FREERTOS              =y
 CONFIG_SHELL                 =y
 #CONFIG_LOG_DISABLE          =n
@@ -30,3 +30,11 @@ CONFIG_OPENAMP_VIRTIO_DEVICE_SUPPORT =n
 CONFIG_OPENAMP_VIRTIO_DRIVER_SUPPORT =y
 CONFIG_RAM_FOR_AP_SIZE = 0x48000
 CONFIG_WRAM_FOR_AP_SIZE = 0x28000
+
+CONFIG_SOCKET_OFFLOAD =y
+CONFIG_SOCKET_OFFLOAD_CLIENT =y
+# Socket offload client compiles against the lwIP headers; the lwIP archive
+# link pulls only the referenced address/byte-order helpers, not the stack.
+CONFIG_LWIP =y
+CONFIG_IPERF =y
+CONFIG_IPERF_RAW =n

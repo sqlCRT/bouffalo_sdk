@@ -162,7 +162,7 @@ struct bt_gatt_attr {
 	/** Attribute handle */
 	u16_t			handle;
 	/** Attribute permissions */
-	u8_t			perm;
+	u16_t			perm;
 };
 
 /** @brief GATT Service structure */

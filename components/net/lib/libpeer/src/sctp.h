@@ -35,6 +35,7 @@ typedef struct SctpChunkParam {
 typedef enum SctpParamType {
 
   SCTP_PARAM_STATE_COOKIE = 7,
+  SCTP_PARAM_FORWARD_TSN_SUPPORTED = 0xc000,
 
 } SctpParamType;
 
@@ -72,10 +73,14 @@ typedef struct SctpChunkCommon {
 typedef struct SctpForwardTsnChunk {
   SctpChunkCommon common;
   uint32_t new_cumulative_tsn;
-  uint16_t stream_number;
-  uint16_t stream_sequence_number;
+  uint8_t streams[0];
 
 } SctpForwardTsnChunk;
+
+typedef struct SctpGapAckBlock {
+  uint16_t start;
+  uint16_t end;
+} SctpGapAckBlock;
 
 typedef struct SctpHeader {
   uint16_t source_port;
@@ -142,11 +147,47 @@ typedef enum SctpDataPpid {
 } SctpDataPpid;
 
 #define SCTP_MAX_STREAMS 5
+#define SCTP_TX_HISTORY_SIZE 64
+
+#if !CONFIG_USE_USRSCTP
+typedef enum {
+  SCTP_RETRY_NONE,
+  SCTP_RETRY_INIT,
+  SCTP_RETRY_COOKIE_ECHO,
+  SCTP_RETRY_DCEP_OPEN
+} SctpRetryKind;
+
+typedef struct {
+  uint8_t packet[CONFIG_MTU];
+  size_t size;
+  uint32_t started_ms;
+  uint32_t last_sent_ms;
+  uint16_t sid;
+  uint8_t retries;
+  SctpRetryKind kind;
+} SctpRetryPacket;
+#endif
 
 typedef struct {
   char label[32];  // Stream label
   uint16_t sid;    // Stream ID
+  uint16_t next_ssn;
+  uint16_t rx_next_ssn;
+  uint8_t open;
+  uint8_t unordered;
+  uint8_t drop_on_send_failure;
+  uint8_t ack_pending;
 } SctpStreamEntry;
+
+typedef struct {
+  uint32_t tsn;
+  uint8_t valid;
+  uint8_t abandonable;
+} SctpTxHistoryEntry;
+
+typedef int (*SctpSendPacketCallback)(void* user_data,
+                                      const uint8_t* packet,
+                                      size_t packet_size);
 
 typedef struct Sctp {
   struct socket* sock;
@@ -157,14 +198,53 @@ typedef struct Sctp {
   uint32_t verification_tag;
   uint32_t tsn;
   DtlsSrtp* dtls_srtp;
+  SctpSendPacketCallback send_packet;
+  void* send_packet_user_data;
   Buffer** data_rb;
   int stream_count;
   SctpStreamEntry stream_table[SCTP_MAX_STREAMS];
+  uint16_t next_ssn_fallback;
+#if !CONFIG_USE_USRSCTP
+  uint32_t tx_cumulative_tsn_ack;
+  /* Preserve abandonable history across ring-buffer eviction. Reliable
+   * control TSNs stop this prefix until the peer acknowledges them. */
+  uint32_t tx_abandonable_prefix_tsn;
+  uint32_t tx_evicted_through_tsn;
+  uint32_t tx_evicted_reliable_tsn;
+  uint32_t last_forward_tsn;
+  uint32_t forward_tsn_sent;
+  uint32_t sack_gap_reports;
+  uint32_t data_retransmissions;
+  uint32_t data_retry_exhaustions;
+  uint8_t tx_cumulative_tsn_ack_valid;
+  uint8_t tx_abandonable_prefix_valid;
+  uint8_t tx_evicted_through_valid;
+  uint8_t tx_evicted_reliable_valid;
+  uint8_t peer_supports_forward_tsn;
+  uint8_t last_forward_tsn_valid;
+  uint8_t forward_tsn_repeat_sacks;
+  SctpTxHistoryEntry tx_history[SCTP_TX_HISTORY_SIZE];
+  SctpRetryPacket retry_packet;
+  /* Independent, bounded pending DCEP OPENs; allocated only while opening. */
+  SctpRetryPacket* dcep_retries[SCTP_MAX_STREAMS];
+  struct SctpTxPacket* tx_head;
+  struct SctpTxPacket* tx_tail;
+  unsigned int tx_count;
+  int cookie_issued;
+  uint32_t rx_tsn;
+  int rx_tsn_valid;
+  struct SctpRxChunk* rx_head;
+  unsigned int rx_count;
+  uint32_t rx_tsn_mask;
+  uint8_t rx_sack_pending;
+#endif
 
   /* datachannel */
   void (*onmessage)(char* msg, size_t len, void* userdata, uint16_t sid);
   void (*onopen)(void* userdata);
   void (*onclose)(void* userdata);
+  /* Channel event, distinct from the association's onopen. Borrowed label. */
+  void (*onchannelopen)(uint16_t sid, const char* label, void* userdata);
 
   void* userdata;
   uint8_t buf[CONFIG_MTU];
@@ -175,6 +255,34 @@ int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp);
 void sctp_destroy_association(Sctp* sctp);
 
 int sctp_is_connected(Sctp* sctp);
+
+/* Drive retransmission, queued receive delivery and receive-window updates. */
+void sctp_poll(Sctp* sctp, uint32_t now_ms);
+
+int sctp_is_stream_open(Sctp* sctp, uint16_t sid);
+
+void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid);
+
+void sctp_set_stream_unordered(Sctp* sctp, uint16_t sid, int unordered);
+
+void sctp_set_stream_drop_on_send_failure(Sctp* sctp, uint16_t sid,
+                                          int drop_on_send_failure);
+
+int sctp_stream_drops_on_send_failure(Sctp* sctp, uint16_t sid);
+
+uint32_t sctp_get_forward_tsn_sent(const Sctp* sctp);
+
+uint32_t sctp_get_sack_gap_reports(const Sctp* sctp);
+
+uint32_t sctp_get_data_retransmissions(const Sctp* sctp);
+
+uint32_t sctp_get_data_retry_exhaustions(const Sctp* sctp);
+
+int sctp_peer_supports_forward_tsn(const Sctp* sctp);
+
+void sctp_set_send_packet_callback(Sctp* sctp,
+                                   SctpSendPacketCallback callback,
+                                   void* user_data);
 
 void sctp_incoming_data(Sctp* sctp, char* buf, size_t len);
 

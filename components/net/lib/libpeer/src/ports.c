@@ -16,6 +16,7 @@
 #include <net/if.h>
 #include <netdb.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #endif
 
 #include "ports.h"
@@ -40,7 +41,7 @@ int ports_get_host_addr(Address* addr, const char* iface_prefix) {
         break;
       case AF_INET:
       default:
-        if (!ip_addr_isany(&netif->ip_addr)) {
+        if (!ip_addr_isany_val(netif->ip_addr)) {
           memcpy(&addr->sin.sin_addr, &netif->ip_addr.u_addr.ip4, 4);
           ret = 1;
         }
@@ -143,9 +144,13 @@ int ports_resolve_addr(const char* host, Address* addr) {
 }
 
 uint32_t ports_get_epoch_time() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return (uint32_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+#if CONFIG_USE_LWIP
+  return (uint32_t)sys_now();
+#else
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (uint32_t)now.tv_sec * 1000U + now.tv_nsec / 1000000U;
+#endif
 }
 
 void ports_sleep_ms(int ms) {

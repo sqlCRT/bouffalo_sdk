@@ -19,6 +19,8 @@ int hostapd_ctrl_iface_deauthenticate(struct hostapd_data *hapd,
 				      const char *txtaddr);
 int hostapd_ctrl_iface_disassociate(struct hostapd_data *hapd,
 				    const char *txtaddr);
+int hostapd_ctrl_iface_acl_enable(struct hostapd_data *hapd,
+				  const char *acl_mode);
 int hostapd_ctrl_iface_signature(struct hostapd_data *hapd,
 				 const char *txtaddr,
 				 char *buf, size_t buflen);

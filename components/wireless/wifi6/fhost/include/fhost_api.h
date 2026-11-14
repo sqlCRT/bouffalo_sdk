@@ -449,11 +449,16 @@ struct fhost_vif_sta_cfg
      */
     uint16_t freq[2];
     /**
-     * AP scan duration, In TUs.
+     * Connect-scan time spent on each channel, in TUs (1 TU = 1024 us).
+     * 0: active scan uses SCAN_ACTIVE_DURATION. Passive, NO_IR, or radar
+     * channels use SCAN_PASSIVE_DURATION. Both macros are in macsw.h.
+     * Non-zero: channel time is duration * 1024 us.
      */
     uint16_t duration;
     /**
-     * AP scan probe request TX count
+     * Probe Request count per channel. 0 sends 2.
+     * Spacing is channel time / count and is at least 20 ms. Probes that do
+     * not fit in the channel time are not sent.
      */
     uint16_t probe_cnt;
     /**
@@ -667,6 +672,8 @@ struct fhost_vif_ap_cfg
 
     /// Disable advertising WME/WMM Information Element in Beacon/ProbeResponse frames
     bool disable_wmm;
+    /** Startup ACS in the band and bandwidth in chan; surveys use 20MHz. */
+    bool acs;
 };
 
 /**

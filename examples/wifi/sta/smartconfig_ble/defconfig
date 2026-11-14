@@ -13,7 +13,6 @@ ifeq ($(CHIP),bl602)
     CONFIG_HW_SEC_ENG_DISABLE =y
     CONFIG_BT_SETTINGS        =y
     CONFIG_ROMAPI             =y
-    CONFIG_BL_SDK             =y
 else ifeq ($(CHIP),bl616cl)
     CONFIG_BLUETOOTH          =y
     CONFIG_BTBLECONTROLLER_LIB =m2s1
@@ -25,9 +24,4 @@ else
     CONFIG_BLE_TP_SERVER       =y
 endif
 
-ifeq ($(filter $(CHIP),bl616 bl616cl),)
-    CONFIG_COEX                =y
-endif
-
 CONFIG_BFLB_BLESYNC=y
-

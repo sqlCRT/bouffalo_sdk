@@ -1,4 +1,8 @@
 # Changes
+## 2026-10-09
+1. [blemesh] Fix CVE-2022-1042: during PB-ADV provisioning, gen_prov_cont() could calculate an invalid buffer offset from a peer's continuation segment index, especially index zero, and copy data outside the receive buffer. Reject zero or indexes beyond the last segment, then check the offset and remaining space before copying.
+2. [blemesh] Fix CVE-2023-4258: when a device used Public Key OOB provisioning, prov_dh_key_gen() accepted a provisioner public key equal to its own, allowing the reflected key into DHKey generation. Compare the keys on the device side and fail provisioning before generating the DHKey when they match.
+
 ## 2026-03-12
 1. [blemesh] Refactor tinycrypt header include paths.
 

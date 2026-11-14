@@ -2191,7 +2191,7 @@ void bt_gatt_set_mtu(u16_t size)
 #endif
 
 u8_t bt_gatt_check_perm(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			u8_t mask)
+			u16_t mask)
 {
 	if ((mask & BT_GATT_PERM_READ) &&
 	    (!(attr->perm & BT_GATT_PERM_READ_MASK) || !attr->read)) {

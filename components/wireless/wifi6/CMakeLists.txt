@@ -1,3 +1,5 @@
+sdk_add_include_directories(include)
+
 add_subdirectory(wpa_supplicant)
 add_subdirectory(wifi6_lwip_adapter)
 add_subdirectory(macsw_os_adapter)

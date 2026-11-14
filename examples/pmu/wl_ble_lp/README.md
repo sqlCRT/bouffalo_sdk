@@ -24,6 +24,12 @@ ADV = 500MS: Enter the command "ble\_start\_adv 0 0 0x0320 0x0320" in the comman
 
 4. When connection established enter the command "pm_enter_lp " in the command line.
 
+### BL618DG RC32K trigger
+
+The shared `pm_helper_cli` provides `ble_rc32k_trigger <0|1>` for BL618DG builds with BLE and LPFW tickless support. Without this command, LPFW disables RC32K triggering during advertising and enables it during a connection. After `ble_rc32k_trigger 0` or `ble_rc32k_trigger 1`, both states use the specified value from the next sleep hand-off until reboot.
+
+This demo enables `CONFIG_PM_HELPER_CLI=y` by default. Shared commands include `wakeup_timer <timeout_ms> <broadcast:0|1>`, `wifi_lp_set_dtim`, `io_debug`, `lpfw_uart`, and `lpfw_clock` (the last two on supported chips). The existing `pm_enter_lp [broadcast]` command remains available; shared `tickless [dtim] [broadcast:0|1]` also enters low power.
+
 ### BLE Benchmark：
 
 The following test data reduced the power of BLE TX. The modification is as follows: Change "pwr\_table\_ble = <13> to pwr\_table\_ble = <0>;" in the file "bsp/board/bl616\_dk/config/bl\_factory\_params\_IoTKitA\_auto.dts".
@@ -206,7 +212,7 @@ Please be noticed, the USB Host feature in this demo is only for purpose of Wi-F
 ### Build Command
 
 ```bash
-make CONFIG_USBH_MSC=1
+make CONFIG_USBH_MSC=y
 ```
 
 ### Test Step
