@@ -2,6 +2,30 @@
 
 审计日期：2026-11-14。工作分支：`codex/sdk-upgrade-20261114`。
 
+## FreeRTOS 内部 WRAM 回退（2026-11-14）
+
+本分支移植诊断 SDK 提交 `397072143edd94797bc64af0981419fedba5b989` 的修复及测试，
+配套普通升级固件为 `3.27t2-sdk238`。以下诊断日志是定位依据，未引入诊断分支的其他功能。
+
+`codex/disconnect-snapshot-20261113` 的 d9 实机日志在蓝牙初始化期间两次
+进入 `vApplicationMallocFailedHook`，诊断 arena 尚未启动；`mepc=a004879a`
+对应最终 ELF 中 `pvPortMalloc` 的失败断点。转储被启动看门狗打断，未包含
+失败请求大小、调用者及各堆剩余量，不能据此指定某一次具体分配。
+
+升级漏查了 `heap_3.c` 的策略变化：旧版 `kmalloc(size, 0)` 可使用注册的
+OCRAM 和 WRAM，新版仅指定 OCRAM。板级初始化仍注册 32 KiB 内部 WRAM
+（0x23028000，位于蓝牙 EM 之外），但 RTOS 分配无法使用它。
+
+增加默认关闭、仅 BL616/BL618 可选的 `FREERTOS_INTERNAL_WRAM_FALLBACK`；
+配套固件开启后，保持 OCRAM 优先，失败再尝试内部 WRAM。不会回退到 PSRAM
+或蓝牙 EM；全部内部内存不可用时仍保留原失败钩子，释放仍按指针寻找所属堆。
+不削减栈、池、功能或诊断记录，不增加运行期日志和预留缓冲。
+
+`tests/run-freertos-internal-heap-tests.py` 编译真实 heap_3/MM/TLSF，覆盖新旧
+策略、OCRAM 碎片但 WRAM 可用、OCRAM 优先、10000 次复用、释放归属、WRAM
+未注册、两池耗尽、PSRAM 不被使用及失败钩子在恢复调度后恰好执行一次。
+这些是主机策略回归，不能替代接收器实机启动验收。
+
 ## 基线与升级来源
 
 - 原项目 SDK：`tbgamer_dev` / `f8dad96a4612fe5c8d96c89d6698e150c5af1f97`。
