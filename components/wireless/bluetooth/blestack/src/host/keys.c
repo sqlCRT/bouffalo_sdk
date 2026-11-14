@@ -266,13 +266,9 @@ void bt_keys_clear(struct bt_keys *keys)
     memset(keys, 0, sizeof(*keys));
     
     #if defined (CONFIG_BT_SETTINGS)
-    size_t len = 0;
-
-    if (lfs_kv_get_blob(NV_KEY_POOL, NULL, 0, &len) == 0) {
-        BT_DBG("Not found %s in settings", NV_KEY_POOL);
-    } else {
-        lfs_kv_del(NV_KEY_POOL);
-    }
+    /* Size-only reads return zero copied bytes, not an existence result.
+     * Deletion is idempotent when the stored pool is already absent. */
+    lfs_kv_del(NV_KEY_POOL);
     #endif /* CONFIG_BT_SETTINGS */
 #else
 	BT_DBG("%s (keys 0x%04x)", bt_addr_le_str(&keys->addr), keys->keys);

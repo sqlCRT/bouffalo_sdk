@@ -280,13 +280,8 @@ int bt_settings_get_bin(const char *key, u8_t *value, size_t exp_len, size_t *re
 
 int settings_delete(const char *key)
 {
-    size_t len = 0;
-
-    if (lfs_kv_get_blob(key, NULL, 0, &len) == 0) {
-        BT_DBG("Not found %s in settings", key);
-        return 0;
-    }
-
+    /* A size-only get returns zero bytes copied even for an existing key.
+     * The KV delete operation already treats missing keys as success. */
     return lfs_kv_del(key);
 }
 
