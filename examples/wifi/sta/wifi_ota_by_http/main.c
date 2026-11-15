@@ -73,12 +73,27 @@ extern int wifi_mgmr_task_start(void);
  * Private Function Prototypes
  ****************************************************************************/
 
+static void wifi_ota_dump_partition(void);
+
 /****************************************************************************
  * Functions
  ****************************************************************************/
 
 void wifi_start_firmware_task(void *param)
 {
+    /* Run RF and partition initialization on the task stack. */
+    if (0 != rfparam_init(0, NULL, 0)) {
+        LOG_I("PHY RF init failed!\r\n");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    LOG_I("PHY RF init success!\r\n");
+
+    wifi_ota_dump_partition();
+
+    tcpip_init(NULL, NULL);
+
     LOG_I("Starting wifi ...\r\n");
 
     async_register_event_filter(EV_WIFI, wifi_event_handler, NULL);
@@ -142,13 +157,21 @@ void wifi_event_handler(async_input_event_t ev, void *priv)
         case CODE_WIFI_ON_AP_STA_DEL: {
             LOG_I("[APP] [EVT] [AP] [DEL] %lld\r\n", xTaskGetTickCount());
         } break;
+        case CODE_WIFI_ON_AP_CSA_DONE: {
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_AP_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
+        } break;
+        case CODE_WIFI_ON_STA_CSA_DONE: {
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_STA_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
+        } break;
         default: {
             LOG_I("[APP] [EVT] Unknown code %u \r\n", code);
         }
     }
 }
 
-static void wifi_ota_dump_partition()
+static void wifi_ota_dump_partition(void)
 {
     pt_table_stuff_config pt_table_stuff[2];
     pt_table_id_type active_id;
@@ -194,16 +217,6 @@ int main(void)
     uart0 = bflb_device_get_by_name("uart0");
     shell_init_with_task(uart0);
 
-    if (0 != rfparam_init(0, NULL, 0)) {
-        LOG_I("PHY RF init failed!\r\n");
-        return 0;
-    }
-
-    LOG_I("PHY RF init success!\r\n");
-
-    wifi_ota_dump_partition();
-
-    tcpip_init(NULL, NULL);
     xTaskCreate(wifi_start_firmware_task, "wifi init", 1024, NULL, 10, NULL);
 
     vTaskStartScheduler();

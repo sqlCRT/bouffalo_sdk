@@ -33,7 +33,9 @@
 #define RPMSG_ROLE   RPMSG_REMOTE
 #endif
 
+#ifndef IPM_TASK_STACK_SIZE
 #define IPM_TASK_STACK_SIZE 512
+#endif
 #define IPM_TASK_PRIORITY   (configMAX_PRIORITIES - 1)
 
 static TaskHandle_t ipm_task_handle = NULL;

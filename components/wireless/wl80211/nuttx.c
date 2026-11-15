@@ -34,20 +34,27 @@
 #include <nuttx/net/netdev.h>
 #include <nuttx/mm/iob.h>
 #include <nuttx/irq.h>
-#include "mbedtls/mbedtls_config.h"
+#include <nuttx/spinlock.h>
 #include <nuttx/net/ip.h>
 #include <nuttx/net/tcp.h>
 #include <nuttx/net/udp.h>
 
 #include "wl80211.h"
+#include "macsw_plat.h"
 #include "macsw/wl80211_mac.h"
-#include <bflb_sec_trng.h>
 
 /* DEFINES
  **************************************************************************************** */
 
 #define NETIF_MAX_HWADDR_LEN          (6)
 #define CONFIG_WL80211_TX_RETRY_COUNT (7)
+
+/* STA frames wl80211_output() may keep queued in the MAC.  Each keeps its
+ * IOB chain until completion and the MAC queue itself is unbounded, so this
+ * leaves IOBs for reception.
+ */
+
+#define WL80211_TX_INFLIGHT_MAX       (24)
 
 /* Network header length constants for packet dump */
 #define ETH_HDRLEN     14  /* Ethernet header length */
@@ -92,6 +99,8 @@ struct wl80211_netif
 static struct wl80211_netif *g_netif_list = NULL;
 static void *(*g_forward_cb)(void *netbuf, void *payload, int len, void *free_fn) = NULL;
 static void (*g_rx_cb)(void *buf, void *addr, uint16_t len, void *free_fn) = NULL;
+static void (*g_txdone_cb)(void) = NULL;
+static int g_tx_inflight;
 
 /* EXTERNAL VARIABLES
  **************************************************************************************** */
@@ -99,8 +108,12 @@ static void (*g_rx_cb)(void *buf, void *addr, uint16_t len, void *free_fn) = NUL
 /* FUNCTION DECLARATIONS
  **************************************************************************************** */
 
+/* wl80211_output() places the TX descriptor at the start of the first IOB
+ * and the Ethernet header takes the last ETH_HDRLEN bytes of the guard.
+ */
+
 _Static_assert(sizeof(struct wl80211_mac_tx_desc) <=
-                 CONFIG_NET_LL_GUARDSIZE,
+                 CONFIG_NET_LL_GUARDSIZE - ETH_HDRLEN,
                "tx_desc too large");
 
 /**
@@ -143,6 +156,22 @@ void net_buf_tx_free(net_buf_tx_t *buf)
   if (iob)
     {
       iob_free_chain(iob);
+    }
+}
+
+static void wl80211_sta_tx_complete(void *buf)
+{
+  irqstate_t flags;
+
+  net_buf_tx_free((net_buf_tx_t *)buf);
+
+  flags = enter_critical_section();
+  g_tx_inflight--;
+  leave_critical_section(flags);
+
+  if (g_txdone_cb)
+    {
+      g_txdone_cb();
     }
 }
 
@@ -190,7 +219,13 @@ void wl80211_platform_free_wram(void *ptr)
 {
   DEBUGASSERT(ptr != NULL);
 
+#ifdef CONFIG_IOB_ALLOC
+  /* io_data is a pointer; pool IOBs keep their data right after the header */
+
+  struct iob_s *iob = (struct iob_s *)ptr - 1;
+#else
   struct iob_s *iob = container_of(ptr, struct iob_s, io_data);
+#endif
 
   if (iob)
     {
@@ -222,6 +257,35 @@ void internal_register_forward_cb(void *cb)
 void internal_register_recv_cb(rx_cb_type cb)
 {
   g_rx_cb = cb;
+}
+
+/**
+ ****************************************************************************************
+ * @brief Register STA TX completion callback
+ *
+ * Called after a STA frame handed to wl80211_output() has been released by
+ * the MAC layer, so the driver can retry frames refused with -EAGAIN.
+ *
+ * @param[in] cb  Pointer to TX completion callback function
+ ****************************************************************************************
+ */
+
+void internal_register_txdone_cb(void (*cb)(void))
+{
+  g_txdone_cb = cb;
+}
+
+/**
+ ****************************************************************************************
+ * @brief Check whether wl80211_output() can take another STA frame
+ *
+ * @return true if fewer than WL80211_TX_INFLIGHT_MAX frames are in flight
+ ****************************************************************************************
+ */
+
+bool wl80211_output_ready(void)
+{
+  return g_tx_inflight < WL80211_TX_INFLIGHT_MAX;
 }
 
 /**
@@ -456,11 +520,11 @@ eth_only:
  * @param[in] status    Receive status flags
  ****************************************************************************************
  */
-void wl80211_tcpip_input(enum wl80211_vif_type vif, void *rxhdr, void *buf, uint32_t frm_len, uint32_t status)
+void wl80211_tcpip_input(uint8_t vif_type, void *rxhdr, void *buf, uint32_t frm_len, uint32_t status)
 {
   struct eth_hdr_s *eth = buf;
   void *eth_buf = buf;
-  UNUSED(vif);
+  UNUSED(vif_type);
   UNUSED(status);
 
   DEBUGASSERT(buf != NULL && frm_len > 0);
@@ -505,6 +569,7 @@ int wl80211_output(net_buf_tx_t *buf)
   struct iob_s *iob = (struct iob_s *)buf;
   struct iob_s *pkt;
   struct iovec txseg[TX_PBD_CNT];
+  irqstate_t flags;
   int seg_cnt;
   int idx;
   uint16_t length;
@@ -518,6 +583,20 @@ int wl80211_output(net_buf_tx_t *buf)
       return ERROR;
     }
 
+  /* -EAGAIN: too many frames in flight; the IOB still belongs to the caller,
+   * which retries it after the next TX completion.
+   */
+
+  flags = enter_critical_section();
+  if (g_tx_inflight >= WL80211_TX_INFLIGHT_MAX)
+    {
+      leave_critical_section(flags);
+      return -EAGAIN;
+    }
+
+  g_tx_inflight++;
+  leave_critical_section(flags);
+
   dump_ethhdr("TX", IOB_DATA(iob) - ETH_HDRLEN, iob->io_pktlen + ETH_HDRLEN);
 
   length = iob->io_pktlen + ETH_HDRLEN;
@@ -530,7 +609,7 @@ int wl80211_output(net_buf_tx_t *buf)
 
   /* Get pointer to reserved headroom */
 
-  txhdr = (void *)ALIGN4_HI((uint32_t)&iob->io_data);
+  txhdr = (void *)ALIGN4_HI((uint32_t)iob->io_data);
   DEBUGASSERT(txhdr && (txseg[0].iov_base >= (void *)((uint32_t)txhdr + CONFIG_NET_LL_GUARDSIZE - ETH_HDRLEN)));
 
   /* Process additional segments */
@@ -548,7 +627,12 @@ int wl80211_output(net_buf_tx_t *buf)
 
   seg_cnt = idx;
 
-  DEBUGASSERT(length == 0);
+  if (length != 0)
+    {
+      wlerr("Not enough segments for complete TX packet\n");
+      ret = ERROR;
+      goto errout;
+    }
 
   /* Transmit packet through MAC layer.
    * The MAC layer will call the provided callback to free the IOB buffer
@@ -556,16 +640,24 @@ int wl80211_output(net_buf_tx_t *buf)
    */
 
   ret = wl80211_mac_tx(WL80211_VIF_STA, txhdr, 0, txseg, seg_cnt,
-                       (void (*)(void *))net_buf_tx_free, iob);
-
+                       wl80211_sta_tx_complete, iob);
   if (ret != 0)
     {
-      net_buf_tx_free((net_buf_tx_t *)iob);
       wlerr("MAC transmission failed\n");
-      return ERROR;
+      ret = ERROR;
+      goto errout;
     }
 
   return OK;
+
+errout:
+  net_buf_tx_free((net_buf_tx_t *)iob);
+
+  flags = enter_critical_section();
+  g_tx_inflight--;
+  leave_critical_section(flags);
+
+  return ret;
 }
 
 /**
@@ -586,7 +678,7 @@ int wl80211_output(net_buf_tx_t *buf)
  ****************************************************************************************
  */
 
-int wl80211_output_raw(enum wl80211_vif_type vif, void *buffer, uint16_t len, unsigned int flags,
+int wl80211_output_raw(uint8_t vif_type, void *buffer, uint16_t len, unsigned int flags,
                        void (*cb)(void *), void *opaque)
 {
   struct iob_s *iob;
@@ -643,7 +735,7 @@ int wl80211_output_raw(enum wl80211_vif_type vif, void *buffer, uint16_t len, un
   length -= txseg[0].iov_len;
 
   /* Get pointer to reserved headroom */
-  txhdr = (void *)ALIGN4_HI((uint32_t)&iob->io_data);
+  txhdr = (void *)ALIGN4_HI((uint32_t)iob->io_data);
   DEBUGASSERT(txhdr && (txseg[0].iov_base >= (void *)((uint32_t)txhdr + CONFIG_NET_LL_GUARDSIZE - ETH_HDRLEN)));
 
   /* Process additional segments */
@@ -680,7 +772,7 @@ int wl80211_output_raw(enum wl80211_vif_type vif, void *buffer, uint16_t len, un
    * Use wrapper callback to ensure both the user callback is called
    * and the IOB buffer is properly freed.
    */
-  ret = wl80211_mac_tx(vif, txhdr, flags, txseg, seg_cnt,
+  ret = wl80211_mac_tx(vif_type, txhdr, flags, txseg, seg_cnt,
                        wl80211_raw_free_wrapper, free_data);
 
   if (ret != 0)
@@ -756,35 +848,6 @@ int wl80211_lwip_init(void)
 /* SYSTEM API IMPLEMENTATIONS */
 
 /**
- * ****************************************************************************************
- * @brief Hardware entropy poll function for mbedTLS
- * @param data       Pointer to user data (not used)
- * @param output     Pointer to output
- * @param len        Length of output
- * @param olen       Pointer to output length
- * @return 0 on success
- * ****************************************************************************************
- */
-#if defined(MBEDTLS_ENTROPY_C)
-#if defined(MBEDTLS_ENTROPY_HARDWARE_ALT)
-int mbedtls_hardware_poll(void *data,
-                          unsigned char *output,
-                          size_t len,
-                          size_t *olen)
-{
-  irqstate_t flags;
-  flags = enter_critical_section();
-  bflb_trng_readlen(output, len);
-  leave_critical_section(flags);
-
-  *olen = len;
-
-  return (0);
-}
-#endif
-#endif /* MBEDTLS_ENTROPY_C */
-
-/**
  ****************************************************************************************
  * @brief System log function for wl80211
  *
@@ -797,8 +860,37 @@ int mbedtls_hardware_poll(void *data,
 
 extern void *__attribute__((weak)) _wifi_log_flag;
 
+/* NuttX retains its existing syslog policy; the SDK runtime CLI is not ported. */
+int wifi_verbosity_set(int level)
+{
+  (void)level;
+  return -ENOTSUP;
+}
+
+int wifi_verbosity_get(void)
+{
+  return &_wifi_log_flag ? WIFI_DIAG_DEBUG : WIFI_DIAG_OFF;
+}
+
+bool wifi_verbosity_enabled(uint8_t severity)
+{
+#if defined(CONFIG_MACSW_LOG_NO_PRINT) || defined(CONFIG_LOG_DISABLE)
+  (void)severity;
+  return false;
+#else
+  int threshold = wifi_verbosity_get();
+
+  return threshold != WIFI_DIAG_OFF && severity <= threshold;
+#endif
+}
+
+#undef wifi_syslog
 void wifi_syslog(int priority, const char *fmt, ...)
 {
+#if defined(CONFIG_MACSW_LOG_NO_PRINT) || defined(CONFIG_LOG_DISABLE)
+  (void)priority;
+  (void)fmt;
+#else
   if (&_wifi_log_flag)
     {
       va_list arg;
@@ -807,4 +899,5 @@ void wifi_syslog(int priority, const char *fmt, ...)
       vsyslog(LOG_DEBUG, fmt, arg);
       va_end(arg);
     }
+#endif
 }

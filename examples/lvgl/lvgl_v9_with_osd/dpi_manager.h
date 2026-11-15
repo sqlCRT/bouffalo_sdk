@@ -21,13 +21,6 @@ typedef struct {
 #define LCD_HEIGHT LCD_H
 #define LCD_PIXELS (LCD_WIDTH * LCD_HEIGHT)
 
-/* SW GPIO clock. */
-#if defined(LCD_DPI_STANDARD)
-#define DPI_PIXEL_CLOCK_USE_SW_GPIO 1
-#else
-#define DPI_PIXEL_CLOCK_USE_SW_GPIO 0
-#endif
-
 /* VIDEO_WIDTH / VIDEO_HEIGHT config live in video_config.h. */
 #ifndef VIDEO_WIDTH
 #define VIDEO_WIDTH    LCD_WIDTH
@@ -80,6 +73,15 @@ int frame_buffer_release(jpg_buffer_t *buffer);
 /* Consumer task: pull JPEG buffers from the output queue, MJDEC-decode
  * into ping-pong YUV buffers, switch the DPI background layer to each new frame. */
 void image_switch_task(void *param);
+
+#if defined(CONFIG_LVGL_V9_WITH_OSD_OTA) && CONFIG_LVGL_V9_WITH_OSD_OTA
+#define VIDEO_OTA_PRODUCER 1U
+#define VIDEO_OTA_DECODER  2U
+int video_ota_pause(void);
+void video_ota_resume(void);
+/* Safe task boundary: no JPEG decode or filesystem operation in flight. */
+void video_ota_checkpoint(uint32_t participant);
+#endif
 #endif
 
 #endif /* _DPI_MANAGER_H_ */

@@ -1,18 +1,11 @@
 #ifndef RTP_H_
 #define RTP_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
-#ifdef __BYTE_ORDER
-#define __BIG_ENDIAN 4321
-#define __LITTLE_ENDIAN 1234
-#elif __APPLE__
-#include <machine/endian.h>
-#else
-#include <endian.h>
-#endif
-
 #include "config.h"
+#include "media_diagnostics.h"
 #include "peer_connection.h"
 
 typedef enum RtpPayloadType {
@@ -35,14 +28,14 @@ typedef enum RtpSsrc {
 } RtpSsrc;
 
 typedef struct RtpHeader {
-#if __BYTE_ORDER == __BIG_ENDIAN
+#if LIBPEER_BYTE_ORDER == LIBPEER_BIG_ENDIAN
   uint16_t version : 2;
   uint16_t padding : 1;
   uint16_t extension : 1;
   uint16_t csrccount : 4;
   uint16_t markerbit : 1;
   uint16_t type : 7;
-#elif __BYTE_ORDER == __LITTLE_ENDIAN
+#elif LIBPEER_BYTE_ORDER == LIBPEER_LITTLE_ENDIAN
   uint16_t csrccount : 4;
   uint16_t extension : 1;
   uint16_t padding : 1;
@@ -79,12 +72,25 @@ struct RtpDecoder {
   RtpOnPacket on_packet;
   int (*decode_func)(RtpDecoder* rtp_decoder, uint8_t* data, size_t size);
   void* user_data;
+  uint8_t* h264_buffer;
+  size_t h264_buffer_capacity;
+  size_t h264_offset;
+  uint32_t h264_timestamp;
+  uint16_t h264_expected_seq;
+  int h264_assembling;
+#if CONFIG_LIBPEER_RTP_PACKET_INFO
+  PeerRtpPacketInfo packet_info;
+  int packet_info_valid;
+#endif
+#if CONFIG_LIBPEER_MEDIA_DIAGNOSTICS
+  RtpDiagnostics diagnostics;
+#endif
 };
 
 struct RtpEncoder {
   RtpPayloadType type;
   RtpOnPacket on_packet;
-  int (*encode_func)(RtpEncoder* rtp_encoder, uint8_t* data, size_t size);
+  int (*encode_func)(RtpEncoder* rtp_encoder, const uint8_t* data, size_t size);
   void* user_data;
   uint16_t seq_number;
   uint32_t ssrc;
@@ -97,9 +103,11 @@ int rtp_packet_validate(uint8_t* packet, size_t size);
 
 void rtp_encoder_init(RtpEncoder* rtp_encoder, MediaCodec codec, RtpOnPacket on_packet, void* user_data);
 
-int rtp_encoder_encode(RtpEncoder* rtp_encoder, uint8_t* data, size_t size);
+int rtp_encoder_encode(RtpEncoder* rtp_encoder, const uint8_t* data, size_t size);
 
-void rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_packet, void* user_data);
+int rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_packet, void* user_data);
+
+void rtp_decoder_deinit(RtpDecoder* rtp_decoder);
 
 int rtp_decoder_decode(RtpDecoder* rtp_decoder, uint8_t* data, size_t size);
 

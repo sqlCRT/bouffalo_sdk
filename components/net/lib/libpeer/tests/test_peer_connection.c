@@ -95,10 +95,15 @@ int main(int argc, char* argv[]) {
   peer_connection_ondatachannel(test_user_data.offer_peer_connection, ondatachannel_onmessage_offerer_peer_connection, NULL, NULL);
   peer_connection_ondatachannel(test_user_data.answer_peer_connection, ondatachannel_onmessage_answerer_peer_connection, NULL, NULL);
 
-  peer_connection_create_offer(test_user_data.offer_peer_connection);
-
   pthread_create(&offer_thread, NULL, peer_connection_task, test_user_data.offer_peer_connection);
   pthread_create(&answer_thread, NULL, peer_connection_task, test_user_data.answer_peer_connection);
+
+  const char* offer = peer_connection_create_offer(test_user_data.offer_peer_connection);
+  peer_connection_set_remote_description_with_type(test_user_data.answer_peer_connection,
+                                                   offer, SDP_TYPE_OFFER);
+  const char* answer = peer_connection_create_answer(test_user_data.answer_peer_connection);
+  peer_connection_set_remote_description_with_type(test_user_data.offer_peer_connection,
+                                                   answer, SDP_TYPE_ANSWER);
 
   int attempts = 0, datachannel_created = 0;
   while (attempts < MAX_CONNECTION_ATTEMPTS) {

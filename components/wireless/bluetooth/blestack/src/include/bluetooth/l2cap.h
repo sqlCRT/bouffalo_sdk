@@ -94,6 +94,8 @@ struct bt_l2cap_chan {
 	u16_t				psm;
 	/** Helps match request context during CoC */
 	u8_t				ident;
+	/** Opcode of the pending request */
+	u8_t				pending_req;
 	bt_security_t			required_sec_level;
 #endif /* CONFIG_BT_L2CAP_DYNAMIC_CHANNEL */
 };

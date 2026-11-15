@@ -1094,6 +1094,13 @@ static void prov_dh_key_gen(void)
 	sys_memcpy_swap(remote_pk_le, remote_pk, 32);
 	sys_memcpy_swap(&remote_pk_le[32], &remote_pk[32], 32);
 
+	if (!atomic_test_bit(link.flags, PROVISIONER) &&
+	    link.public_key == PUB_KEY_OOB &&
+	    !memcmp(remote_pk_le, bt_pub_key_get(), sizeof(remote_pk_le))) {
+		prov_fail(PROV_ERR_NVAL_FMT);
+		return;
+	}
+
 	if (bt_dh_key_gen(remote_pk_le, prov_dh_key_cb)) {
 		BT_ERR("Failed to generate DHKey");
 		prov_fail(PROV_ERR_UNEXP_ERR);

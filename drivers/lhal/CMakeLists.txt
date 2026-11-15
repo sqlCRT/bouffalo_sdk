@@ -124,6 +124,8 @@ elseif("${CHIP}" STREQUAL "bl618dg")
         src/bflb_dpi.c
         src/bflb_sec_gmac.c
         src/bflb_touch_v2.c
+        src/bflb_kys.c
+        src/bflb_kys_v2.c
         src/bflb_auadc.c
         src/bflb_audac.c
         src/bflb_multi_core_sync.c
@@ -177,6 +179,16 @@ sdk_library_add_sources(config/${CHIP}/device_table.c)
 string(TOUPPER ${CHIP} CHIPNAME)
 sdk_add_compile_definitions(-D${CHIPNAME})
 
+if(CONFIG_FLASH_AUTO_2LINE_FALLBACK)
+    if(("${CHIP}" STREQUAL "bl616") OR
+       ("${CHIP}" STREQUAL "bl616cl") OR
+       ("${CHIP}" STREQUAL "bl618dg"))
+        sdk_add_private_compile_definitions(BFLB_FLASH_AUTO_2LINE_FALLBACK_ENABLED)
+    else()
+        message(STATUS "FLASH_AUTO_2LINE_FALLBACK is not supported on ${CHIP}")
+    endif()
+endif()
+
 if(CPU_ID)
     string(TOUPPER ${CPU_ID} CPU_ID_NAME)
     sdk_add_compile_definitions(-DCPU_${CPU_ID_NAME})
@@ -193,9 +205,6 @@ else()
 endif()
 
 if((("${CHIP}" STREQUAL "bl618dg") AND (NOT ("${CPU_ID}" STREQUAL "lp"))) OR ("${CHIP}" STREQUAL "bl616cl"))
-    if(CONFIG_PEC_V2)
-        add_subdirectory(src/pec_v2)
-    endif()
     if(CONFIG_MULTIMEDIA_VIDEO)
         add_subdirectory(src/multimedia)
     endif()

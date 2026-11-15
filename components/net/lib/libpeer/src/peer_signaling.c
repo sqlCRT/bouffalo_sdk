@@ -65,24 +65,45 @@ typedef struct PeerSignaling {
 
 static PeerSignaling g_ps = {0};
 
-static int peer_signaling_resolve_token(const char* token, char* username, char* password) {
+static int peer_signaling_resolve_token(const char* token,
+                                        char* username,
+                                        size_t username_size,
+                                        char* password,
+                                        size_t password_size) {
   char plaintext[TOKEN_MAX_LEN] = {0};
   char* colon;
+  int plaintext_len;
+  size_t username_len;
+  size_t password_len;
 
-  if (token == NULL || strlen(token) == 0) {
+  if (token == NULL || token[0] == '\0' || username == NULL || username_size == 0 ||
+      password == NULL || password_size == 0) {
     LOGW("Invalid token");
     return -1;
   }
-  base64_decode(token, strlen(token), (unsigned char*)plaintext, sizeof(plaintext));
+  plaintext_len = libpeer_base64_decode(token, strlen(token),
+                                        (unsigned char*)plaintext, sizeof(plaintext) - 1);
+  if (plaintext_len < 0) {
+    LOGW("Invalid base64 token");
+    return -1;
+  }
+  plaintext[plaintext_len] = '\0';
   colon = strchr(plaintext, ':');
   if (colon == NULL) {
-    LOGW("Invalid token: %s", token);
+    LOGW("Token does not contain credentials separator");
     return -1;
   }
 
-  strncpy(username, plaintext, colon - plaintext);
-  strncpy(password, colon + 1, strlen(colon + 1));
-  LOGD("Username: %s, Password: %s", username, password);
+  username_len = (size_t)(colon - plaintext);
+  password_len = (size_t)plaintext_len - username_len - 1;
+  if (username_len >= username_size || password_len >= password_size) {
+    LOGW("Decoded credentials are too long");
+    return -1;
+  }
+  memcpy(username, plaintext, username_len);
+  username[username_len] = '\0';
+  memcpy(password, colon + 1, password_len);
+  password[password_len] = '\0';
   return 0;
 }
 
@@ -173,7 +194,7 @@ static void peer_signaling_on_pub_event(const char* msg, size_t size) {
     }
 
     item = cJSON_GetObjectItem(req, "id");
-    if (!item && !cJSON_IsNumber(item)) {
+    if (!item || !cJSON_IsNumber(item)) {
       error = cJSON_CreateRaw(RPC_ERROR_INVALID_REQUEST);
       LOGW("Cannot find id");
       break;
@@ -182,7 +203,7 @@ static void peer_signaling_on_pub_event(const char* msg, size_t size) {
     id = item->valueint;
 
     item = cJSON_GetObjectItem(req, "method");
-    if (!item && cJSON_IsString(item)) {
+    if (!item || !cJSON_IsString(item)) {
       error = cJSON_CreateRaw(RPC_ERROR_INVALID_REQUEST);
       LOGW("Cannot find method");
       break;
@@ -203,14 +224,15 @@ static void peer_signaling_on_pub_event(const char* msg, size_t size) {
       }
     } else if (strcmp(item->valuestring, RPC_METHOD_ANSWER) == 0) {
       item = cJSON_GetObjectItem(req, "params");
-      if (!item && !cJSON_IsString(item)) {
+      if (!item || !cJSON_IsString(item)) {
         error = cJSON_CreateRaw(RPC_ERROR_INVALID_PARAMS);
         LOGW("Cannot find params");
         break;
       }
 
       if (state == PEER_CONNECTION_NEW) {
-        peer_connection_set_remote_description(g_ps.pc, item->valuestring);
+        peer_connection_set_remote_description_with_type(g_ps.pc, item->valuestring,
+                                                         SDP_TYPE_OFFER);
         result = cJSON_CreateString("");
       }
 
@@ -344,7 +366,9 @@ static int peer_signaling_http_post(const char* hostname, const char* path, int 
       hostname, path, res.pHeaders, res.statusCode, res.pBody);
 
   if (res.statusCode == 201) {
-    peer_connection_set_remote_description(g_ps.pc, (const char*)res.pBody);
+    peer_connection_set_remote_description_with_type(g_ps.pc,
+                                                     (const char*)res.pBody,
+                                                     SDP_TYPE_ANSWER);
   }
   return 0;
 }
@@ -415,7 +439,11 @@ static int peer_signaling_mqtt_connect(const char* hostname, int port) {
   conn_info.cleanSession = false;
 
   if (strlen(g_ps.token) > 0) {
-    peer_signaling_resolve_token(g_ps.token, username, password);
+    if (peer_signaling_resolve_token(g_ps.token, username, sizeof(username),
+                                     password, sizeof(password)) < 0) {
+      ssl_transport_disconnect(&g_ps.net_ctx);
+      return -1;
+    }
     conn_info.pUserName = username;
     conn_info.userNameLength = strlen(username);
     conn_info.pPassword = password;

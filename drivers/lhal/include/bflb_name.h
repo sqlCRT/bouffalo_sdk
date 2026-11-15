@@ -96,12 +96,6 @@
 #define BFLB_NAME_GMAC1          "gmac1"
 /* and so on...*/
 
-#define BFLB_NAME_PEC_SM0        "pec_sm0"
-#define BFLB_NAME_PEC_SM1        "pec_sm1"
-#define BFLB_NAME_PEC_SM2        "pec_sm2"
-#define BFLB_NAME_PEC_SM3        "pec_sm3"
-/* and so on...*/
-
 #define BFLB_NAME_CAN0           "can0"
 #define BFLB_NAME_CAN1           "can1"
 #define BFLB_NAME_CAN2           "can2"
@@ -136,6 +130,7 @@
 #define BFLB_NAME_WO             "wo"
 #define BFLB_NAME_CKS            "cks"
 #define BFLB_NAME_KYS            "kys"
+#define BFLB_NAME_KYS_V2         "kys_v2"
 #define BFLB_NAME_CSI            "csi"
 #define BFLB_NAME_MJPEG          "mjpeg"
 #define BFLB_NAME_MJDEC          "mjdec"

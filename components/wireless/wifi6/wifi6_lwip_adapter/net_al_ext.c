@@ -51,6 +51,17 @@ int net_al_ext_dhcp_connect(int is_api, uint32_t to_ms)
     (void)to_ms;
     return -1;
 }
+int net_al_ext_dhcp_connect_vif(int fhost_vif_idx, int is_api, uint32_t to_ms)
+{
+    (void)fhost_vif_idx;
+    (void)is_api;
+    (void)to_ms;
+    return -1;
+}
+void net_al_ext_dhcp_disconnect_vif(int fhost_vif_idx)
+{
+    (void)fhost_vif_idx;
+}
 void net_al_ext_dhcp_disconnect(void)
 {
 }
@@ -65,7 +76,6 @@ static ip4_addr_t saved_ip_mask = {IPADDR_ANY};
 static ip4_addr_t saved_ip_gw = {IPADDR_ANY};
 static int dhcp_renew_ok = 0;
 
-#ifdef BL618DG
 static uint8_t net_al_ext_sta_band(void)
 {
     struct fhost_vif_status vif_status;
@@ -80,7 +90,6 @@ static uint8_t net_al_ext_sta_band(void)
 
     return vif_status.chan.band;
 }
-#endif
 
 static void net_if_disable_arp_for_us(net_al_if_t net_if)
 {
@@ -107,6 +116,88 @@ static void net_if_set_default(net_al_if_t net_if)
     inet_if_t *nif = (inet_if_t *)net_if;
 
     netifapi_netif_set_default(nif);
+}
+
+static bool net_if_ipv4_ready(struct netif *netif)
+{
+    return netif && netif_is_up(netif) && netif_is_link_up(netif) &&
+           !ip4_addr_isany_val(*netif_ip4_addr(netif));
+}
+
+static bool net_al_ext_ipv4_subnets_overlap(struct netif *first,
+                                            struct netif *second)
+{
+    uint32_t common_mask;
+
+    if (!net_if_ipv4_ready(first) || !net_if_ipv4_ready(second) ||
+        ip4_addr_isany_val(*netif_ip4_netmask(first)) ||
+        ip4_addr_isany_val(*netif_ip4_netmask(second)))
+        return false;
+
+    /* A valid IPv4 mask intersection is the shorter of the two prefixes. */
+    common_mask = ip4_addr_get_u32(netif_ip4_netmask(first)) &
+                  ip4_addr_get_u32(netif_ip4_netmask(second));
+
+    return ((ip4_addr_get_u32(netif_ip4_addr(first)) ^
+             ip4_addr_get_u32(netif_ip4_addr(second))) & common_mask) == 0;
+}
+
+static void net_al_ext_warn_ipv4_subnet_overlap(void)
+{
+    static bool warning_reported;
+    struct netif *sta = fhost_to_net_if(MGMR_VIF_STA);
+    struct netif *ap = fhost_to_net_if(MGMR_VIF_AP);
+    bool overlap = net_al_ext_ipv4_subnets_overlap(sta, ap);
+    char sta_addr[IP4ADDR_STRLEN_MAX];
+    char sta_mask[IP4ADDR_STRLEN_MAX];
+    char ap_addr[IP4ADDR_STRLEN_MAX];
+    char ap_mask[IP4ADDR_STRLEN_MAX];
+
+    if (!overlap) {
+        warning_reported = false;
+        return;
+    }
+
+    if (warning_reported)
+        return;
+
+    ip4addr_ntoa_r(netif_ip4_addr(sta), sta_addr, sizeof(sta_addr));
+    ip4addr_ntoa_r(netif_ip4_netmask(sta), sta_mask, sizeof(sta_mask));
+    ip4addr_ntoa_r(netif_ip4_addr(ap), ap_addr, sizeof(ap_addr));
+    ip4addr_ntoa_r(netif_ip4_netmask(ap), ap_mask, sizeof(ap_mask));
+    printf("[wifi][WARN] AP_STA_SUBNET_OVERLAP: STA=%s/%s AP=%s/%s; "
+           "routing is ambiguous. Use different subnets or bind sockets "
+           "to a netif.\r\n",
+           sta_addr, sta_mask, ap_addr, ap_mask);
+    warning_reported = true;
+}
+
+/* Called from the lwIP netif status callback while the TCP/IP core is locked. */
+static void net_al_ext_update_default_netif(void)
+{
+    struct netif *sta = fhost_to_net_if(MGMR_VIF_STA);
+    struct netif *ap = fhost_to_net_if(MGMR_VIF_AP);
+    struct netif *selected = NULL;
+
+    /* Do not override a usable default interface owned by another subsystem. */
+    if (netif_default && netif_default != sta && netif_default != ap &&
+        net_if_ipv4_ready(netif_default))
+        return;
+
+    if (net_if_ipv4_ready(sta))
+        selected = sta;
+    else if (net_if_ipv4_ready(ap))
+        selected = ap;
+
+    if (netif_default == selected)
+        return;
+
+    netif_set_default(selected);
+    if (selected)
+        printf("[lwip] default netif: %c%c%u\r\n",
+               selected->name[0], selected->name[1], selected->num);
+    else
+        printf("[lwip] default netif cleared\r\n");
 }
 
 static void net_if_set_ip(net_al_if_t net_if, uint32_t ip, uint32_t mask, uint32_t gw)
@@ -139,7 +230,111 @@ int net_if_get_ip(net_al_if_t net_if, uint32_t *ip, uint32_t *mask, uint32_t *gw
     return 0;
 }
 
-static uint32_t stop_dhcpc;
+struct dhcpc_session {
+    uint32_t generation;
+    uint32_t cancel_generation;
+    rtos_task_handle task;
+    bool running;
+};
+
+struct dhcp_task_cfg {
+    uint8_t fhost_vif_idx;
+    uint32_t to_ms;
+    uint32_t generation;
+    int from_api;
+};
+
+static struct dhcpc_session dhcpc_sessions[CFG_VIF_MAX];
+static uint32_t default_dns_server;
+static bool default_dns_valid;
+
+static uint32_t dhcpc_session_begin(int fhost_vif_idx)
+{
+    struct dhcpc_session *session = &dhcpc_sessions[fhost_vif_idx];
+    uint32_t protect = rtos_protect();
+    uint32_t generation = 0;
+
+    if (!session->running) {
+        session->generation++;
+        if (session->generation == 0)
+            session->generation++;
+        session->cancel_generation = 0;
+        session->task = NULL;
+        session->running = true;
+        generation = session->generation;
+    }
+
+    rtos_unprotect(protect);
+    return generation;
+}
+
+static bool dhcpc_session_wait_idle(int fhost_vif_idx)
+{
+    uint32_t start_ms = rtos_now(false);
+
+    while (1) {
+        uint32_t protect = rtos_protect();
+        bool running = dhcpc_sessions[fhost_vif_idx].running;
+
+        rtos_unprotect(protect);
+        if (!running)
+            return true;
+        if (rtos_now(false) - start_ms >= 500)
+            return false;
+        rtos_task_suspend(10);
+    }
+}
+
+static void dhcpc_session_set_task(int fhost_vif_idx, uint32_t generation,
+                                   rtos_task_handle task)
+{
+    struct dhcpc_session *session = &dhcpc_sessions[fhost_vif_idx];
+    uint32_t protect = rtos_protect();
+
+    if (session->running && session->generation == generation)
+        session->task = task;
+
+    rtos_unprotect(protect);
+}
+
+static void dhcpc_session_cancel(int fhost_vif_idx)
+{
+    struct dhcpc_session *session = &dhcpc_sessions[fhost_vif_idx];
+    uint32_t protect = rtos_protect();
+
+    if (session->running)
+        session->cancel_generation = session->generation;
+
+    rtos_unprotect(protect);
+}
+
+static bool dhcpc_session_cancelled(int fhost_vif_idx, uint32_t generation)
+{
+    struct dhcpc_session *session = &dhcpc_sessions[fhost_vif_idx];
+    uint32_t protect = rtos_protect();
+    bool cancelled = session->running &&
+                     session->generation == generation &&
+                     session->cancel_generation == generation;
+
+    rtos_unprotect(protect);
+    return cancelled;
+}
+
+static void dhcpc_session_complete(int fhost_vif_idx, uint32_t generation)
+{
+    struct dhcpc_session *session = &dhcpc_sessions[fhost_vif_idx];
+    uint32_t protect = rtos_protect();
+
+    if (session->running && session->generation == generation) {
+        session->running = false;
+        session->task = NULL;
+        if (session->cancel_generation == generation)
+            session->cancel_generation = 0;
+    }
+
+    rtos_unprotect(protect);
+}
+
 static int net_dhcp_start(net_al_if_t net_if)
 {
     #if LWIP_IPV4 && LWIP_DHCP
@@ -202,6 +397,30 @@ static int net_get_dns(uint32_t *dns_server)
     #endif
 }
 
+static void net_dns_cache_default(void)
+{
+    uint32_t dns_server;
+
+    if (!net_get_dns(&dns_server)) {
+        uint32_t protect = rtos_protect();
+
+        default_dns_server = dns_server;
+        default_dns_valid = true;
+        rtos_unprotect(protect);
+    }
+}
+
+static void net_dns_restore_default(void)
+{
+    uint32_t protect = rtos_protect();
+    uint32_t dns_server = default_dns_server;
+    bool valid = default_dns_valid;
+
+    rtos_unprotect(protect);
+    if (valid)
+        net_set_dns(dns_server);
+}
+
 static int fhost_dhcp_stop(net_al_if_t net_if)
 {
     // Release DHCP lease
@@ -224,19 +443,26 @@ static int fhost_dhcp_stop(net_al_if_t net_if)
 
 static int net_quick_dhcp_restore(net_al_if_t net_if);
 
-static int fhost_dhcp_start(net_al_if_t net_if, uint32_t to_ms, uint32_t from_api)
+static int fhost_dhcp_start(int fvif_idx, net_al_if_t net_if, uint32_t to_ms,
+                            uint32_t from_api, uint32_t generation)
 {
+    coex_protect_acquire_result_t coex_prot_result;
     uint32_t start_ms;
     bool coex_prot_acquired = false;
-    uint8_t coex_prot_band = PHY_BAND_2G4;
+    uint8_t coex_prot_band = net_al_ext_sta_band();
     int ret = 0;
     int dhcp_renew = 0;
 
-    if (wifi_mgmr_sta_coex_status_get()) {
-#ifdef BL618DG
-        coex_prot_band = net_al_ext_sta_band();
-#endif
-        coex_prot_acquired = (coex_protect_acquire(COEX_PROT_DHCP, coex_prot_band) == 0);
+    coex_prot_result = coex_protect_acquire(COEX_PROT_DHCP,
+                                             coex_prot_band);
+    if (coex_prot_result == COEX_PROTECT_ACQUIRE_ERROR) {
+        return DHCPC_START_FAILED;
+    }
+    coex_prot_acquired = coex_prot_result == COEX_PROTECT_ACQUIRED;
+
+    if (dhcpc_session_cancelled(fvif_idx, generation)) {
+        ret = DHCPC_START_ABORT;
+        goto out;
     }
 
     // Run DHCP client
@@ -252,16 +478,16 @@ static int fhost_dhcp_start(net_al_if_t net_if, uint32_t to_ms, uint32_t from_ap
         }
     }
 
+    assert((unsigned int)fvif_idx < CFG_VIF_MAX);
     start_ms = rtos_now(false);
-    stop_dhcpc = 0;
     while ((dhcp_renew ? (!dhcp_renew_ok) : (net_dhcp_address_obtained(net_if))) &&
           (rtos_now(false) - start_ms < to_ms) &&
-          (!stop_dhcpc))
+          !dhcpc_session_cancelled(fvif_idx, generation))
     {
         rtos_task_suspend(dhcp_renew ? 50 : 100);
     }
 
-    if (stop_dhcpc) {
+    if (dhcpc_session_cancelled(fvif_idx, generation)) {
         fhost_dhcp_stop(net_if);
         ret = DHCPC_START_ABORT;
         goto out;
@@ -277,21 +503,47 @@ static int fhost_dhcp_start(net_al_if_t net_if, uint32_t to_ms, uint32_t from_ap
 
 out:
     if (coex_prot_acquired) {
-        (void)coex_protect_release(COEX_PROT_DHCP, coex_prot_band);
+        if (coex_protect_release(COEX_PROT_DHCP, coex_prot_band) != 0 &&
+            ret == 0) {
+            ret = DHCPC_START_FAILED;
+        }
     }
 
     return ret;
 }
 
-int net_al_ext_set_vif_ip(int fvif_idx, struct net_al_ext_ip_addr_cfg *cfg)
+static int net_al_ext_set_vif_ip_internal(
+    int fvif_idx, struct net_al_ext_ip_addr_cfg *cfg,
+    uint32_t session_generation)
 {
     int ret = 0;
+    bool owns_session = false;
     net_al_if_t net_if;
+    struct fhost_vif_status vif_status;
+    int vif_type = VIF_UNKNOWN;
+
+    if ((unsigned int)fvif_idx >= CFG_VIF_MAX || !cfg)
+        return -1;
 
     net_if = fhost_to_net_if(fvif_idx);
     assert(net_if);
 
-    if (MGMR_VIF_AP == fvif_idx)
+    if (cfg->default_output) {
+        net_if_set_default(net_if);
+        net_dns_cache_default();
+    }
+
+    if (!fhost_get_vif_status(fvif_idx, &vif_status))
+        vif_type = vif_status.type;
+
+    if (VIF_UNKNOWN == vif_type) {
+        if (MGMR_VIF_AP == fvif_idx)
+            vif_type = VIF_AP;
+        else if (MGMR_VIF_STA == fvif_idx)
+            vif_type = VIF_STA;
+    }
+
+    if (VIF_AP == vif_type)
     {
         switch (cfg->mode)
         {
@@ -302,41 +554,60 @@ int net_al_ext_set_vif_ip(int fvif_idx, struct net_al_ext_ip_addr_cfg *cfg)
         case IP_ADDR_STATIC_IPV4:
             // To be safe
             net_if_set_ip(net_if, cfg->ipv4.addr, cfg->ipv4.mask, cfg->ipv4.gw);
-            if (cfg->ipv4.dns)
+            if (cfg->default_output && cfg->ipv4.dns)
                 net_set_dns(cfg->ipv4.dns);
-            else
+            else if (cfg->default_output)
                 net_get_dns(&cfg->ipv4.dns);
+            if (cfg->default_output)
+                net_dns_cache_default();
             break;
         default:
             return VIF_MODE_ERR;
         }
     }
-    else if (MGMR_VIF_STA == fvif_idx)
+    else if (VIF_STA == vif_type)
     {
         switch (cfg->mode)
         {
         case IP_ADDR_NONE:
             // clear current IP address
+            dhcpc_session_cancel(fvif_idx);
             fhost_dhcp_stop(net_if);
             net_if_set_ip(net_if, 0, 0, 0);
-            stop_dhcpc = 1;
             return 0;
         case IP_ADDR_STATIC_IPV4:
             // To be safe
+            dhcpc_session_cancel(fvif_idx);
             net_if_enable_arp_for_us(net_if);
             fhost_dhcp_stop(net_if);
             net_if_set_ip(net_if, cfg->ipv4.addr, cfg->ipv4.mask, cfg->ipv4.gw);
-            if (cfg->ipv4.dns)
+            if (cfg->default_output && cfg->ipv4.dns)
                 net_set_dns(cfg->ipv4.dns);
-            else
+            else if (cfg->default_output)
                 net_get_dns(&cfg->ipv4.dns);
+            if (cfg->default_output)
+                net_dns_cache_default();
             break;
         case IP_ADDR_DHCP_CLIENT:
-            ret = fhost_dhcp_start(net_if, cfg->dhcp.to_ms, cfg->dhcp.from_api);
+            if (!session_generation) {
+                if (!dhcpc_session_wait_idle(fvif_idx))
+                    return DHCPC_START_FAILED;
+                session_generation = dhcpc_session_begin(fvif_idx);
+                if (!session_generation)
+                    return DHCPC_START_FAILED;
+                owns_session = true;
+            }
+            ret = fhost_dhcp_start(fvif_idx, net_if, cfg->dhcp.to_ms,
+                                   cfg->dhcp.from_api, session_generation);
+            if (owns_session)
+                dhcpc_session_complete(fvif_idx, session_generation);
             if (ret)
                 return ret;
             net_if_get_ip(net_if, &(cfg->ipv4.addr), &(cfg->ipv4.mask), &(cfg->ipv4.gw));
-            net_get_dns(&cfg->ipv4.dns);
+            if (cfg->default_output)
+                net_get_dns(&cfg->ipv4.dns);
+            else
+                cfg->ipv4.dns = 0;
             printf("{FVIF-%d} ip=I4 gw=I4", fvif_idx);
             break;
         default:
@@ -345,14 +616,16 @@ int net_al_ext_set_vif_ip(int fvif_idx, struct net_al_ext_ip_addr_cfg *cfg)
     }
     else
     {
-        printf("wrong fvif_idx: %d", fvif_idx);
-        assert(0);
+        printf("wrong vif mode: fvif_idx=%d type=%d", fvif_idx, vif_type);
+        return VIF_MODE_ERR;
     }
 
-    if (cfg->default_output)
-        net_if_set_default(net_if);
-
     return VIF_SET_SUCCESS;
+}
+
+int net_al_ext_set_vif_ip(int fvif_idx, struct net_al_ext_ip_addr_cfg *cfg)
+{
+    return net_al_ext_set_vif_ip_internal(fvif_idx, cfg, 0);
 }
 
 int net_al_ext_get_vif_ip(int fvif_idx, struct net_al_ext_ip_addr_cfg *cfg)
@@ -428,17 +701,13 @@ static int show_ip(uint8_t fhost_vif_idx)
     return 0;
 }
 
-struct dhcp_task_cfg {
-    uint32_t to_ms;
-    int from_api;
-};
-
-static int wifi_sta_dhcpc_start(uint8_t fhost_vif_idx, uint32_t to_ms, int from_api)
+static int wifi_sta_dhcpc_start(uint8_t fhost_vif_idx, uint32_t to_ms,
+                                int from_api, uint32_t generation)
 {
     struct net_al_ext_ip_addr_cfg ip_cfg;
     bool dhcp_timeout_event_only = wifiMgmr.sta_connect_param.dhcp_timeout_event_only ? true : false;
     ip_cfg.mode = IP_ADDR_DHCP_CLIENT;
-    ip_cfg.default_output = true;
+    ip_cfg.default_output = (fhost_vif_idx == MGMR_VIF_STA);
     if (to_ms == 0) {
         to_ms = WIFI_STA_DHCPC_TIMEOUT_MS_DEFAULT;
     }
@@ -446,9 +715,15 @@ static int wifi_sta_dhcpc_start(uint8_t fhost_vif_idx, uint32_t to_ms, int from_
     ip_cfg.dhcp.from_api = from_api;
     int ret = 0;
 
-    ret = net_al_ext_set_vif_ip(fhost_vif_idx, &ip_cfg);
+    ret = net_al_ext_set_vif_ip_internal(fhost_vif_idx, &ip_cfg, generation);
     if (ret)
     {
+        if (fhost_vif_idx != MGMR_VIF_STA) {
+            printf("p2p dhcpc failed on vif %u, ret is %d\n",
+                   fhost_vif_idx, ret);
+            return -1;
+        }
+
         if (ret != DHCPC_START_ABORT) {
             if (ret == DHCPC_START_TIMEOUT) {
                 printf("dhcpc obtain ip failed\n");
@@ -484,6 +759,11 @@ static int wifi_sta_dhcpc_start(uint8_t fhost_vif_idx, uint32_t to_ms, int from_
     }
 
     show_ip(fhost_vif_idx);
+#ifdef CONFIG_WIFI_P2P
+    if (fhost_vif_idx != MGMR_VIF_STA)
+        platform_post_event(EV_WIFI, CODE_WIFI_ON_P2P_GOT_IP,
+                            fhost_vif_idx);
+#endif
     if(!from_api && (wifi_mgmr_sta_connect_params_get() & LOW_RATE_CONNECT)) {
         wifi_mgmr_rate_config_sta(0xFFFF);
     }
@@ -492,10 +772,17 @@ static int wifi_sta_dhcpc_start(uint8_t fhost_vif_idx, uint32_t to_ms, int from_
 
 static RTOS_TASK_FCT(fhost_wpa_connected_task) {
     struct dhcp_task_cfg *cfg = (struct dhcp_task_cfg *)env;
+    uint8_t fhost_vif_idx = cfg ? cfg->fhost_vif_idx : MGMR_VIF_STA;
     uint32_t to_ms = cfg ? cfg->to_ms : WIFI_STA_DHCPC_TIMEOUT_MS_DEFAULT;
+    uint32_t generation = cfg ? cfg->generation : 0;
     int dhcp_from_api = cfg ? cfg->from_api : 0;
 
-    wifi_sta_dhcpc_start(MGMR_VIF_STA, to_ms, dhcp_from_api);
+    wifi_sta_dhcpc_start(fhost_vif_idx, to_ms, dhcp_from_api, generation);
+
+    if (cfg)
+        rtos_free(cfg);
+
+    dhcpc_session_complete(fhost_vif_idx, generation);
 
     rtos_task_delete(NULL);
 }
@@ -724,18 +1011,25 @@ static err_t net_al_create_ip6_linklocal_address(int ipv6_enable)
 }
 #endif
 
-int net_al_ext_dhcp_connect(int is_api, uint32_t to_ms)
+int net_al_ext_dhcp_connect_vif(int fhost_vif_idx, int is_api, uint32_t to_ms)
 {
-    net_al_if_t net_if = fhost_to_net_if(MGMR_VIF_STA);
-    static struct dhcp_task_cfg cfg = {0};
-    void *env = &cfg;
+    net_al_if_t net_if;
+    struct dhcp_task_cfg *cfg;
+    rtos_task_handle task = NULL;
+    uint32_t generation;
 
 #if !LWIP_TCPIP_CORE_LOCKING
     #error To do add netif msg call
 #endif
+    if ((unsigned int)fhost_vif_idx >= CFG_VIF_MAX)
+        return -1;
+
+    net_if = fhost_to_net_if(fhost_vif_idx);
+    if (!net_if)
+        return -1;
+
     if (wifiMgmr.sta_connect_param.use_dhcp || is_api) {
-        /* check whether dhcp is already ongoing */
-        if (rtos_task_get_handle("wifi_dhcpc") != NULL) {
+        if (!dhcpc_session_wait_idle(fhost_vif_idx)) {
             printf("already dhcping ...\n");
             return -1;
         }
@@ -743,19 +1037,34 @@ int net_al_ext_dhcp_connect(int is_api, uint32_t to_ms)
         if (to_ms == 0) {
             to_ms = WIFI_STA_DHCPC_TIMEOUT_MS_DEFAULT;
         }
-        cfg.to_ms = to_ms;
-        cfg.from_api = is_api;
+        cfg = rtos_malloc(sizeof(*cfg));
+        if (!cfg)
+            return -2;
+        cfg->fhost_vif_idx = fhost_vif_idx;
+        cfg->to_ms = to_ms;
+        cfg->from_api = is_api;
+        generation = dhcpc_session_begin(fhost_vif_idx);
+        if (!generation) {
+            rtos_free(cfg);
+            return -1;
+        }
+        cfg->generation = generation;
 
         /* disable arp */
         net_if_disable_arp_for_us(net_if);
 
         /* start dhcp */
-        printf("start dhcping ... \r\n");
-        if (rtos_task_create(fhost_wpa_connected_task, "wifi_dhcpc",
-                            WPA_CONNECTED_TASK, 512, env, fhost_wpa_priority, NULL)) {
+        printf("start dhcping on vif %d ... \r\n", fhost_vif_idx);
+        if (rtos_task_create(fhost_wpa_connected_task,
+                            fhost_vif_idx == MGMR_VIF_STA ?
+                            "wifi_dhcpc" : "wifi_dhcpc_p2p",
+                            WPA_CONNECTED_TASK, 512, cfg, fhost_wpa_priority, &task)) {
             printf("start dhcping failed\n");
+            rtos_free(cfg);
+            dhcpc_session_complete(fhost_vif_idx, generation);
             return -2;
         }
+        dhcpc_session_set_task(fhost_vif_idx, generation, task);
 
         return 0;
     }
@@ -766,6 +1075,11 @@ int net_al_ext_dhcp_connect(int is_api, uint32_t to_ms)
 #endif
 #endif
     return -3;
+}
+
+int net_al_ext_dhcp_connect(int is_api, uint32_t to_ms)
+{
+    return net_al_ext_dhcp_connect_vif(MGMR_VIF_STA, is_api, to_ms);
 }
 
 int net_al_set_ipv6_enable(int enable)
@@ -781,19 +1095,40 @@ int net_al_set_ipv6_enable(int enable)
 
 void net_al_ext_dhcp_disconnect(void)
 {
-    if (wifiMgmr.sta_connect_param.use_dhcp) {
+    net_al_ext_dhcp_disconnect_vif(MGMR_VIF_STA);
+}
+
+void net_al_ext_dhcp_disconnect_vif(int fhost_vif_idx)
+{
+    if (fhost_vif_idx < 0 || fhost_vif_idx >= CFG_VIF_MAX)
+        return;
+
+    dhcpc_session_cancel(fhost_vif_idx);
+
+    if (fhost_vif_idx == MGMR_VIF_STA) {
+        if (!wifiMgmr.sta_connect_param.use_dhcp)
+            return;
         if (wifiMgmr.sta_connect_param.quick_connect) {
             net_al_if_t netif = fhost_to_net_if(MGMR_VIF_STA);
             net_quick_dhcp_stop(netif);
         } else {
             wifi_sta_dhcpc_stop(MGMR_VIF_STA);
         }
+    } else {
+        wifi_sta_dhcpc_stop(fhost_vif_idx);
     }
 }
 
 void net_al_ext_netif_status_callback(struct netif *netif)
 {
     static ip4_addr_t old_addr;
+
+    net_al_ext_update_default_netif();
+    if (netif == netif_default)
+        net_dns_cache_default();
+    else
+        net_dns_restore_default();
+    net_al_ext_warn_ipv4_subnet_overlap();
 
     if (!is_sta_netif(netif))
         return;

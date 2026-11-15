@@ -10,7 +10,7 @@
 #include <media.h>
 
 #ifdef CONFIG_SHELL
-#include <devices/drv_snd_bl616.h>
+#include <devices/drv_snd.h>
 #include <shell.h>
 #else
 #include <aos/cli.h>
@@ -29,7 +29,7 @@
 
 static void board_audio_init(void)
 {
-    snd_bl616_config_t snd_config;
+    snd_config_t snd_config;
     // snd_config.audio_in_gain_list[0] = g_audio_in_gain[0];
     // snd_config.audio_in_gain_list[1] = g_audio_in_gain[1];
     // snd_config.audio_in_gain_list[2] = g_audio_in_gain[2];
@@ -44,7 +44,7 @@ static void board_audio_init(void)
     //snd_config.in_negative_pin = INPUT_POSITIVE_PIN;
     //snd_config.out_positive_pin = OUTPUT_NEGATIVE_PIN;
     //snd_config.out_negative_pin = OUTPUT_POSITIVE_PIN;
-    snd_card_bl616_register(&snd_config);
+    snd_card_register(&snd_config);
 }
 
 static void media_evt(int type, smtaudio_player_evtid_t evt_id)

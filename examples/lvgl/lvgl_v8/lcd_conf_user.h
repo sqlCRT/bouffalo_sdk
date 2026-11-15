@@ -415,7 +415,7 @@
 
     /* Selecting DPI working mode
         1: DPI peripheral (support: bl618dg)
-        2: PEC simulation (support: bl616, bl618dg)
+        2: simulation (support: bl616)
     */
     #define LCD_DPI_INTERFACE_TYPE 3
 
@@ -452,7 +452,7 @@
 
     /* Selecting DPI working mode
         1: DPI peripheral (support: bl618dg)
-        2: PEC simulation (support: bl616, bl618dg)
+        2: simulation (support: bl616)
     */
     #define LCD_DPI_INTERFACE_TYPE 3
 
@@ -483,7 +483,7 @@
 
     /* Selecting DPI working mode
         1: DPI peripheral (support: bl618dg)
-        2: PEC simulation (support: bl616, bl618dg)
+        2: simulation (support: bl616)
         3. DPI v2 peripheral (support: bl618dg)
     */
     #define LCD_DPI_INTERFACE_TYPE 3
@@ -510,7 +510,7 @@
 
     /* Selecting DPI working mode
         1: DPI peripheral (support: bl618dg)
-        2: PEC simulation (support: bl616, bl618dg)
+        2: simulation (support: bl616)
         3: DPI v2 peripheral (support: bl618dg)
 
     */
@@ -795,7 +795,7 @@
 
 #endif
 
-/********** PEC simulation DPI configuration **********/
+/********** simulation DPI configuration **********/
 #if (defined(LCD_DPI_INTERFACE_TYPE) && (LCD_DPI_INTERFACE_TYPE == 2))
 
     /* supports 16-wire and 8-wire-latch output modes */

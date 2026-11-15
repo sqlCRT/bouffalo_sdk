@@ -19,12 +19,8 @@ extern "C" {
 #define RPMSG_RPC_INVALID_ID	(-1L)
 #define RPMSG_RPC_SERVICE_NAME "rpmsg-rpc"
 
-/* RPMSG_BUFFER_SIZE = 512
- * sizeof(struct rpmsg_hdr) = 16
- * RPMSG_BUFFER_SIZE - sizeof(struct rpmsg_hdr) - 1 = 495
- * Aligning to 64 bits -> 488UL
- */
-#define MAX_BUF_LEN	488UL
+/* Maximum RPC frame size within the RPMsg payload, aligned to 8 bytes. */
+#define MAX_BUF_LEN ((RPMSG_BUFFER_SIZE - 16UL - 1UL) & ~7UL)
 #define MAX_FUNC_ID_LEN sizeof(uint32_t)
 
 struct rpmsg_rpc_clt;
@@ -92,6 +88,9 @@ struct rpmsg_rpc_svr {
 
 	/** Number of services */
 	unsigned int n_services;
+
+	/** Received frame length during the service callback. */
+	size_t request_len;
 };
 
 /**

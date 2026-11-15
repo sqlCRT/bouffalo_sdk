@@ -26,7 +26,7 @@
 #include "board.h"
 #include "shell.h"
 #include "bflb_mtd.h"
-#include "easyflash.h"
+#include "lfs_kv.h"
 #include "web_config.h"
 
 #ifndef BL602
@@ -109,6 +109,14 @@ void wifi_event_handler(async_input_event_t ev, void *priv)
         case CODE_WIFI_ON_AP_STARTED:
             xTaskCreate(web_init_task, "web", 512, NULL, 14, NULL);
             break;
+        case CODE_WIFI_ON_AP_CSA_DONE:
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_AP_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
+            break;
+        case CODE_WIFI_ON_STA_CSA_DONE:
+            LOG_I("[APP] [EVT] %s, CODE_WIFI_ON_STA_CSA_DONE, channel %u\r\n",
+                  __func__, (unsigned int)ev->value);
+            break;
         default:
             break;
     }
@@ -120,7 +128,7 @@ int main(void)
     uart0 = bflb_device_get_by_name("uart0");
     shell_init_with_task(uart0);
     bflb_mtd_init();
-    easyflash_init();
+    lfs_kv_init();
     
     if (rfparam_init(0, NULL, 0) != 0) {
         LOG_E("RF init failed\r\n");

@@ -27,7 +27,7 @@
 #include "hci_core.h"
 
 #include "bflb_mtd.h"
-#include "easyflash.h"
+#include "lfs_kv.h"
 
 #if defined(CONFIG_BT_OAD_SERVER)
 #include "oad_main.h"
@@ -143,8 +143,8 @@ int main(void)
     shell_init_with_task(uart0);
 
     bflb_mtd_init();
-    /* ble stack need easyflash kv */
-    easyflash_init();
+    /* ble stack need lfs_kv */
+    lfs_kv_init();
 
     /* Init rf */
     if (0 != rfparam_init(0, NULL, 0)) {
@@ -157,6 +157,10 @@ int main(void)
     printf("cmd_set_btble_standalone\r\n");
     extern void cmd_set_btble_standalone(int argc, char **argv);
     cmd_set_btble_standalone(0, 0);
+    if (0 != rfparam_init(0, NULL, 0)) {
+        printf("standalone PHY RF init failed!\r\n");
+        return 0;
+    }
     #else
     printf("cmd_set_btble_combo\r\n");
     extern void cmd_set_btble_combo(int argc, char **argv);

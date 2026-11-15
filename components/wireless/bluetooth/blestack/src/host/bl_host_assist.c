@@ -173,6 +173,10 @@ static int hast_ble_reset(void)
 		}
 
 		rp = (void *)rsp->data;
+		if (rsp->len < sizeof(*rp)) {
+			net_buf_unref(rsp);
+			return -EINVAL;
+		}
 		tx_octets = sys_le16_to_cpu(rp->max_tx_octets);
 		tx_time = sys_le16_to_cpu(rp->max_tx_time);
 		net_buf_unref(rsp);

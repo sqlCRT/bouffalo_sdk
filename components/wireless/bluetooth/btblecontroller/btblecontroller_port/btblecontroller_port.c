@@ -24,6 +24,10 @@
 #include "wl_api.h"
 #endif
 #include "bl618dg_pds.h"
+#if defined(CONFIG_BLE_PDS) && !defined(CONFIG_IOT_SDK)
+#include "bl618dg_hbn.h"
+#include "bl_lp.h"
+#endif
 #include "bflb_gpio.h"
 #endif
 
@@ -35,6 +39,10 @@
 
 #if defined(BL702L)
 #include "bl702l_glb.h"
+#if !defined(CONFIG_IOT_SDK)
+#include "bl702l_hbn.h"
+#include "bl702l_pds.h"
+#endif
 #endif
 
 #if defined(CONFIG_IOT_SDK)
@@ -212,15 +220,17 @@ __attribute__((weak)) int btblecontroller_efuse_read_mac(uint8_t mac[6])
     return status;
 }
 
+#if defined(BL616) || defined(BL618DG) || defined(BL616CL)
+__attribute__((weak)) void btblecontroller_software_pds_reset()
+{
+    GLB_AHB_MCU_Software_Reset(GLB_AHB_MCU_SW_PDS);
+}
+#endif
+
 #if defined(BL616) || defined(BL618DG)
 __attribute__((weak)) void btblecontroller_software_btdm_reset()
 {
     GLB_AHB_MCU_Software_Reset(GLB_AHB_MCU_SW_BTDM);
-}
-
-__attribute__((weak)) void btblecontroller_software_pds_reset()
-{
-    GLB_AHB_MCU_Software_Reset(GLB_AHB_MCU_SW_PDS);
 }
 
 __attribute__((weak)) void btblecontroller_pds_trim_rc32m()
@@ -296,6 +306,123 @@ __attribute__((weak)) uint64_t btblecontroller_mtimer_get_time_us(void)
 }
 
 #if defined(BL618DG)
+#if defined(CONFIG_BLE_PDS) && !defined(CONFIG_IOT_SDK)
+#define BLE_RX_PPM_MIN_HUS 1000000ULL /* At least 500 ms between reference events. */
+static uint8_t ble_rx_ppm_link_id = UINT8_MAX;
+
+__attribute__((weak)) uint64_t btblecontroller_lp_rtc_get_us(void)
+{
+    uint64_t rtc_cnt;
+
+    HBN_Get_RTC_Timer_Val((uint32_t *)&rtc_cnt, (uint32_t *)&rtc_cnt + 1);
+    return BL_PDS_CNT_TO_US(rtc_cnt);
+}
+
+__attribute__((weak)) void btblecontroller_lp_rx_ppm_reset(uint8_t link_id)
+{
+    if (ble_rx_ppm_link_id == link_id) {
+        bl_lp_ble_rx_ppm_clear();
+        ble_rx_ppm_link_id = UINT8_MAX;
+    }
+}
+
+/* Called only for the first usable peripheral RX packet in an event. Shared
+ * history continues through APP/LPFW ownership changes without reinitializing.
+ * A short APP interval must not replace the baseline or the last valid ppm. */
+__attribute__((weak)) void btblecontroller_lp_rx_ppm_update(uint8_t link_id, uint16_t evt_cnt,
+                                                         uint16_t interval, uint8_t rate, uint64_t rx_rtc_hus,
+                                                         int64_t age_hus)
+{
+    lp_fw_ble_para_t *ble = iot2lp_para->ble_parameter;
+    uint16_t evt_delta;
+    uint64_t expected_hus, rtc_delta_hus;
+    int64_t error, numerator;
+
+    (void)age_hus;
+
+    if (ble == NULL || interval == 0U || rx_rtc_hus == 0U) {
+        return;
+    }
+    if (ble_rx_ppm_link_id != link_id) {
+        bl_lp_ble_rx_ppm_clear();
+        ble_rx_ppm_link_id = link_id;
+    }
+    if (ble->con_rx_ppm_rtc_hus == 0U || ble->con_rx_ppm_interval != interval ||
+        ble->con_rx_ppm_rate != rate) {
+        ble->con_rx_ppm_valid = 0U;
+        goto baseline;
+    }
+    evt_delta = (uint16_t)(evt_cnt - ble->con_rx_ppm_evt_cnt);
+    if (evt_delta == 0U) {
+        return;
+    }
+    if (evt_delta >= 0x8000U || rx_rtc_hus <= ble->con_rx_ppm_rtc_hus) {
+        ble->con_rx_ppm_valid = 0U;
+        goto baseline;
+    }
+    expected_hus = (uint64_t)evt_delta * interval * 625U;
+    if (expected_hus < BLE_RX_PPM_MIN_HUS) {
+        return;
+    }
+    rtc_delta_hus = rx_rtc_hus - ble->con_rx_ppm_rtc_hus;
+    if (expected_hus > UINT32_MAX || rtc_delta_hus >= expected_hus * 2U) {
+        ble->con_rx_ppm_valid = 0U;
+        goto baseline;
+    }
+    error = (int64_t)rtc_delta_hus - (int64_t)expected_hus;
+    numerator = error * 1000000LL;
+    numerator += error < 0 ? -(int64_t)(expected_hus / 2U) : (int64_t)(expected_hus / 2U);
+    ble->con_rx_ppm = (int32_t)(numerator / (int64_t)expected_hus);
+    ble->con_rx_ppm_valid = 1U;
+
+baseline:
+    ble->con_rx_ppm_rtc_hus = rx_rtc_hus;
+    ble->con_rx_ppm_evt_cnt = evt_cnt;
+    ble->con_rx_ppm_interval = interval;
+    ble->con_rx_ppm_rate = rate;
+}
+
+__attribute__((weak)) bool btblecontroller_lp_rx_ppm_ready(uint8_t link_id, uint16_t interval, uint8_t rate)
+{
+    const lp_fw_ble_para_t *ble = iot2lp_para->ble_parameter;
+
+    return ble != NULL && ble_rx_ppm_link_id == link_id && ble->con_rx_ppm_valid != 0U &&
+           ble->con_rx_ppm_interval == interval && ble->con_rx_ppm_rate == rate;
+}
+
+#else
+__attribute__((weak)) uint64_t btblecontroller_lp_rtc_get_us(void)
+{
+    return 0;
+}
+
+__attribute__((weak)) void btblecontroller_lp_rx_ppm_update(uint8_t link_id, uint16_t evt_cnt,
+                                                         uint16_t interval, uint8_t rate, uint64_t rx_rtc_hus,
+                                                         int64_t age_hus)
+{
+    (void)link_id;
+    (void)evt_cnt;
+    (void)interval;
+    (void)rate;
+    (void)rx_rtc_hus;
+    (void)age_hus;
+}
+
+__attribute__((weak)) void btblecontroller_lp_rx_ppm_reset(uint8_t link_id)
+{
+    (void)link_id;
+}
+
+__attribute__((weak)) bool btblecontroller_lp_rx_ppm_ready(uint8_t link_id, uint16_t interval, uint8_t rate)
+{
+    (void)link_id;
+    (void)interval;
+    (void)rate;
+    return false;
+}
+
+#endif
+
 __attribute__((weak)) void btblecontroller_gpio_config(uint8_t pin, uint8_t is_high)
 {
     struct bflb_device_s *gpio;
@@ -352,3 +479,114 @@ __attribute__((weak)) uint16_t btblecontroller_rc32k_xtal_count_wait_result(void
     return (uint16_t)xtal_cnt2;
 }
 #endif
+
+/*
+ * Current-SDK shims for BL702L controller code that still calls HOSAL APIs
+ * directly; legacy builds get the same symbols from platform/hosal/bl702l_hal.
+ */
+#if defined(BL702L) && !defined(CONFIG_IOT_SDK)
+
+#ifdef BL702L_Delay_US
+#undef BL702L_Delay_US
+#endif
+
+#define BL_RTC_MAX_COUNTER  ((1ULL << 40) - 1)
+
+static uint64_t bl702l_rtc_get_counter(void)
+{
+    uint32_t low;
+    uint32_t high;
+
+    HBN_Get_RTC_Timer_Val(&low, &high);
+    return ((uint64_t)high << 32) | low;
+}
+
+__attribute__((weak)) uint64_t bl_rtc_get_aligned_counter(void)
+{
+    uint32_t low_previous;
+    uint32_t low;
+    uint32_t high;
+
+    HBN_Get_RTC_Timer_Val(&low_previous, &high);
+    do {
+        HBN_Get_RTC_Timer_Val(&low, &high);
+    } while (low == low_previous);
+
+    return ((uint64_t)high << 32) | low;
+}
+
+__attribute__((weak)) uint64_t bl_rtc_get_delta_counter(uint64_t ref_cnt)
+{
+    uint64_t cnt = bl702l_rtc_get_counter();
+
+    ref_cnt &= BL_RTC_MAX_COUNTER;
+    if (cnt < ref_cnt) {
+        cnt += BL_RTC_MAX_COUNTER + 1;
+    }
+    return cnt - ref_cnt;
+}
+
+__attribute__((weak)) void bl_rtc_trigger_xtal_cnt_32k(void)
+{
+    uint32_t value = BL_RD_REG(HBN_BASE, HBN_GLB);
+
+    if (BL_GET_REG_BITS_VAL(value, HBN_F32K_SEL) == 1) {
+        return;
+    }
+
+    value = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    value = BL_SET_REG_BIT(value, GLB_CLR_XTAL_CNT_32K_DONE);
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, value);
+
+    value = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    value = BL_SET_REG_BIT(value, GLB_XTAL_CNT_32K_SW_TRIG_PS);
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, value);
+}
+
+__attribute__((weak)) uint16_t bl_rtc_process_xtal_cnt_32k(void)
+{
+    uint32_t value = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+
+    if (BL_GET_REG_BITS_VAL(value, PDS_XTAL_CNT_32K_PROCESS)) {
+        do {
+            value = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+        } while (!BL_GET_REG_BITS_VAL(value, PDS_XTAL_CNT_32K_DONE));
+    }
+
+    return BL_GET_REG_BITS_VAL(value, PDS_RO_XTAL_CNT_32K_CNT);
+}
+
+__attribute__((weak)) uint32_t bl_rtc_32k_to_32m(uint32_t cycles)
+{
+    uint32_t value = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    uint16_t cnt = BL_GET_REG_BITS_VAL(value, PDS_RO_XTAL_CNT_32K_CNT);
+    uint16_t res = BL_GET_REG_BITS_VAL(value, PDS_RO_XTAL_CNT_32K_RES);
+
+    return cycles * cnt + cycles * res / 64;
+}
+
+__attribute__((weak)) uint64_t bl_timer_now_us64(void)
+{
+    return bflb_mtimer_get_time_us();
+}
+
+__attribute__((weak)) void BL702L_Delay_US(uint32_t cnt)
+{
+    bflb_mtimer_delay_us(cnt);
+}
+
+__attribute__((weak)) int bl_wireless_mac_addr_get(uint8_t mac[8])
+{
+    mac[0] = 0;
+    mac[1] = 0;
+    return bflb_efuse_read_mac_address_opt(0, mac + 2, 1);
+}
+
+/* Legacy parity: bl_iot_sdk hosal defaults to 0 until the app calls
+ * bl_wireless_default_tx_power_set(); a strong app symbol overrides this. */
+__attribute__((weak)) int8_t bl_wireless_default_tx_power_get(void)
+{
+    return 0;
+}
+
+#endif /* BL702L && !CONFIG_IOT_SDK */

@@ -4,6 +4,8 @@
 
 menu "Network"
 
+source "$BL_SDK_BASE/components/net/socket_offload/Kconfig"
+
 config LWIP
     bool "lwIP"
     default n
@@ -70,12 +72,6 @@ config ATMODULE
     help
       Build the AT command module.
 
-config SPISYNC
-    bool "AT module SPI sync transport"
-    default n
-    help
-      Enable the SPI synchronous transport for the AT module.
-
 config NXSPI_NET
     bool "NX SPI network transport"
     default n
@@ -133,6 +129,24 @@ config NETHUB_LOWPOWER_ENABLE
     help
       Enable low-power handling in the Nethub transport.
 
+config NETHUB_DEV_SELECT
+    string "Legacy Nethub device selection"
+    default ""
+    help
+      Compatibility selector for legacy build commands using sdio or usb.
+
+config NETHUB_HOTCODE_IN_FLASH
+    bool "Place Nethub hot code in flash"
+    default n
+
+config NETHUB_HOTCODE_IN_RAM
+    bool "Place Nethub hot code in RAM"
+    default n
+
+config NETHUB_HOTCODE_IN_PSRAM
+    bool "Place Nethub hot code in PSRAM"
+    default n
+
 endif # CONFIG_NETHUB
 
 config HTTP
@@ -179,13 +193,127 @@ config RTSP
     bool "RTSP"
     default n
     help
-      Build the RTSP client library.
+      Build the RTSP server library, including the owner-driven
+      rtsp_server API and the legacy librtspsrv API.
+
+config RTSP_LEGACY
+    bool "Legacy task-based RTSP API"
+    depends on RTSP
+    default y
+    help
+      Retain librtspsrv.h and its background FreeRTOS task. Applications using
+      only rtsp_server.h can disable this to omit the legacy implementation.
 
 config LIBPEER
     bool "libpeer"
     default n
+    select LWIP
+    select MBEDTLS
+    select SRTP
+    select MBEDTLS_TLS_VERSION_1_2 if !MBEDTLS_V2
+    select MBEDTLS_DTLS if !MBEDTLS_V2
+    select MBEDTLS_X509_CRT_WRITE_C if !MBEDTLS_V2
     help
       Build the peer-to-peer networking library.
+
+if LIBPEER
+
+config LIBPEER_RTP_PACKET_INFO
+    bool
+    default n
+
+config LIBPEER_MEDIA_DIAGNOSTICS
+    bool "RTP/RTCP media diagnostics (debug only)"
+    default n
+    help
+      Observe authenticated RTP sequence numbers, timestamps and arrival
+      jitter, plus existing RTCP sender/receiver reports. Applications may
+      also collect playback scheduling diagnostics with this option.
+      This is passive instrumentation: no new feedback packets are sent.
+      Disabled builds contain no diagnostic state or per-packet work.
+
+config REMOTE_SDP_MAX_SIZE
+    int "Maximum remote SDP bytes"
+    range 1024 60000
+    default 49152
+    help
+      The remote SDP is bounded and parsed in caller-owned memory without
+      adding a full-size copy to each connection. The caller supplies a NUL
+      terminated string valid for the duration of set_remote_description.
+      This is separate from the local SDP serialization buffer size.
+
+config SCTP_MESSAGE_SIZE
+    int "Maximum DataChannel message bytes"
+    range 1 16384
+    default 16384
+    help
+      Also advertised in SDP. Keep this within the target memory budget.
+      Outgoing messages must also fit the transmit fragment window.
+
+config SCTP_TX_WINDOW
+    int "Reliable SCTP transmit packet slots"
+    range 1 64
+    default 16
+    help
+      Also limits the fragment count of each reliable or abandonable send.
+
+config SCTP_RX_WINDOW
+    int "SCTP receive packet slots"
+    range 2 32
+    default 16
+    help
+      At least two slots are required for fragmented message reassembly.
+      Contiguous received prefixes can be compacted when a message uses
+      more fragments than the receive slot count.
+
+config SCTP_DATA_RETRY_MS
+    int "SCTP reliable DATA retry interval (ms)"
+    range 1 60000
+    default 750
+
+config SCTP_DATA_RETRY_LIMIT
+    int "SCTP reliable DATA retry limit"
+    range 1 64
+    default 8
+
+config DTLS_HANDSHAKE_TIMEOUT_MS
+    int "DTLS handshake deadline (ms)"
+    range 1000 120000
+    default 15000
+
+endif # LIBPEER
+
+config WEBRTC_PEER
+    bool "WebRTC peer facade"
+    default n
+    depends on LIBPEER
+    help
+      Build the application-facing WebRTC peer facade.
+
+config WEBRTC_PEER_MJPEG
+    bool "MJPEG DataChannel adapter"
+    default n
+    depends on WEBRTC_PEER
+    help
+      Build the MJPEG DataChannel chunking and pacing adapter.
+
+config WEBRTC_PEER_AUDIO_PLAYOUT
+    bool "Timestamped mono PCM playout and loss concealment"
+    default n
+    depends on WEBRTC_PEER
+    select LIBPEER_RTP_PACKET_INFO
+    help
+      Build a bounded, sample-timestamped audio jitter buffer and lightweight
+      pitch repetition/fade concealment. Allocation occurs only at creation.
+      Applications serialize push/pull and drive pull from the playback clock.
+      Existing applications keep their original audio callbacks and playback.
+
+config WEBRTC_PEER_SIGNALING_APPRTC
+    bool "AppRTC signaling backend"
+    default n
+    depends on WEBRTC_PEER
+    help
+      Build the optional AppRTC signaling backend.
 
 config SRTP
     bool "SRTP"
@@ -193,6 +321,53 @@ config SRTP
     help
       Build the Secure RTP library.
 
-source "$BL_SDK_BASE/components/net/netbus/atmodule/Kconfig"
+osource "$ATMODULE_PATH/Kconfig"
+
+endmenu
+
+menu "Legacy network compatibility"
+
+config LWIP_ALTCP
+    bool "lwIP ALTCP"
+    default n
+config LWIP_LP
+    bool "lwIP low power"
+    default n
+config HTTPD
+    bool "HTTP daemon (legacy)"
+    default n
+config HTTPS_OTA_USE_CA_CERT
+    bool "Use CA certificate for HTTPS OTA"
+    default n
+config HTTPS_OTA_USE_CLIENT_CERT
+    bool "Use client certificate for HTTPS OTA"
+    default n
+config HOSTROUTER
+    bool "Host router"
+    default n
+config LPAPP
+    bool "Low-power application"
+    default n
+config USE_LPAPP
+    bool "Use low-power application"
+    default n
+config SDIO_LPAPP
+    bool "Use SDIO low-power application"
+    default n
+config ATMODULE_NANO
+    bool "AT module nano mode"
+    default n
+config ATMODULE_NETHUB_WIFICHANNELAUTO
+    bool "AT module nethub channel auto"
+    default n
+config ATMODULE_WIFI
+    bool "AT module Wi-Fi"
+    default n
+config ATMODULE_WIFI_AP
+    bool "AT module Wi-Fi AP"
+    default n
+config ATMODULE_WIFI_STA
+    bool "AT module Wi-Fi station"
+    default n
 
 endmenu

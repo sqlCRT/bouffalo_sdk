@@ -91,8 +91,8 @@ int mem_manager_init(void)
     /* Set manager status */
     manager->initialized = true;
 
-    /* Reset to default ascending order */
-    mm_heap_set_auto_list(NULL, 0);
+    /* Reset MM_FLAG_HEAP_ANY allocations to the default ascending order. */
+    mm_heap_set_any_alloc_order(NULL, 0);
 
     return 0;
 }
@@ -225,8 +225,84 @@ mm_heap_t *mm_register_heap(uint32_t heap_id, const char *name, uint32_t allocat
     return heap;
 }
 
+static void mm_heap_unregister_locked(mem_manager_t *manager, uint32_t heap_id)
+{
+    const mm_allocator_t *allocator;
+    mm_heap_t *heap = manager->heaps[heap_id];
+
+    manager->heaps[heap_id] = NULL;
+    allocator = heap->allocator_id < CONFIG_MM_ALLOCATOR_COUNT ?
+                    manager->allocators[heap->allocator_id] : NULL;
+    if (allocator && allocator->deinit) {
+        allocator->deinit(heap);
+    } else {
+        heap->is_active = false;
+    }
+}
+
 /**
- * @brief Set the automatic heap selection list.
+ * @brief Unregister and deinitialize a heap.
+ */
+int mm_heap_unregister(uint32_t heap_id)
+{
+    mem_manager_t *manager = &g_mem_manager;
+    uintptr_t flags;
+
+    if (!manager->initialized) {
+        return -EPERM;
+    }
+
+    if (heap_id == 0 || heap_id >= CONFIG_MM_HEAP_COUNT) {
+        return -EINVAL;
+    }
+
+    flags = mm_lock_save();
+    if (!manager->heaps[heap_id]) {
+        mm_unlock_restore(flags);
+        return -ENOENT;
+    }
+
+    mm_heap_unregister_locked(manager, heap_id);
+    mm_unlock_restore(flags);
+
+#if IS_ENABLED(CONFIG_MM_ENABLE_MIN_FREE_TRACKING)
+    manager->min_free_size = kfree_size(0);
+#endif
+
+    return 0;
+}
+
+/**
+ * @brief Unregister and deinitialize all heaps.
+ */
+void mm_heap_unregister_all(void)
+{
+    mem_manager_t *manager = &g_mem_manager;
+    uintptr_t flags;
+
+    if (!manager->initialized) {
+        return;
+    }
+
+    flags = mm_lock_save();
+
+    for (uint32_t heap_id = 1; heap_id < CONFIG_MM_HEAP_COUNT; heap_id++) {
+        if (!manager->heaps[heap_id]) {
+            continue;
+        }
+
+        mm_heap_unregister_locked(manager, heap_id);
+    }
+
+#if IS_ENABLED(CONFIG_MM_ENABLE_MIN_FREE_TRACKING)
+    manager->min_free_size = 0;
+#endif
+
+    mm_unlock_restore(flags);
+}
+
+/**
+ * @brief Set the heap allocation order for MM_FLAG_HEAP_ANY.
  *
  * The provided heap IDs are copied into the internal automatic-allocation
  * list in the specified order. Entries with value 0 disable that slot, and
@@ -238,7 +314,7 @@ mm_heap_t *mm_register_heap(uint32_t heap_id, const char *name, uint32_t allocat
  * @param count Number of entries in heap_list.
  * @return 0 on success, negative value on failure.
  */
-int mm_heap_set_auto_list(const uint32_t *heap_list, size_t count)
+int mm_heap_set_any_alloc_order(const uint32_t *heap_list, size_t count)
 {
     mem_manager_t *manager = &g_mem_manager;
     uintptr_t flags;
@@ -289,7 +365,7 @@ int mm_heap_set_auto_list(const uint32_t *heap_list, size_t count)
 }
 
 /**
- * @brief Get the current automatic heap selection list.
+ * @brief Get the heap allocation order for MM_FLAG_HEAP_ANY.
  *
  * Copies the current automatic-allocation list into the caller-provided
  * buffer. The output buffer must contain at least CONFIG_MM_HEAP_COUNT
@@ -300,7 +376,7 @@ int mm_heap_set_auto_list(const uint32_t *heap_list, size_t count)
  * @param count Number of entries available in heap_list.
  * @return 0 on success, negative value on failure.
  */
-int mm_heap_get_auto_list(uint32_t *heap_list, size_t count)
+int mm_heap_get_any_alloc_order(uint32_t *heap_list, size_t count)
 {
     mem_manager_t *manager = &g_mem_manager;
     uintptr_t flags;
@@ -792,6 +868,61 @@ size_t kfree_size(uint32_t heap_id)
     mm_unlock_restore(irq_flags);
 
     return total_free;
+}
+
+/**
+ * @brief Return the largest contiguous free payload block.
+ *
+ * @param heap_id Heap ID to query. Pass 0 to query all active heaps.
+ * @return Largest allocatable payload size in bytes, or 0 on failure.
+ */
+size_t kmax_free_size(uint32_t heap_id)
+{
+    mem_manager_t *manager = &g_mem_manager;
+    uint32_t start_idx, end_idx;
+    uintptr_t irq_flags;
+    size_t max_free_size = 0;
+
+    if (!manager->initialized) {
+        return 0;
+    }
+
+    if (heap_id != 0) {
+        if (heap_id >= CONFIG_MM_HEAP_COUNT) {
+            return 0;
+        }
+        start_idx = heap_id;
+        end_idx = heap_id + 1;
+    } else {
+        start_idx = 1;
+        end_idx = CONFIG_MM_HEAP_COUNT;
+    }
+
+    irq_flags = mm_lock_save();
+
+    for (uint32_t i = start_idx; i < end_idx; i++) {
+        mm_heap_t *heap = manager->heaps[i];
+        const mm_allocator_t *allocator;
+        struct mm_usage_info usage;
+
+        if (!heap || !heap->is_active || heap->allocator_id >= CONFIG_MM_ALLOCATOR_COUNT) {
+            continue;
+        }
+
+        allocator = manager->allocators[heap->allocator_id];
+        if (!allocator || !allocator->get_usage_info) {
+            continue;
+        }
+
+        allocator->get_usage_info(heap, &usage);
+        if ((size_t)usage.max_free_size > max_free_size) {
+            max_free_size = (size_t)usage.max_free_size;
+        }
+    }
+
+    mm_unlock_restore(irq_flags);
+
+    return max_free_size;
 }
 
 /**

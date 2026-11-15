@@ -580,9 +580,9 @@ int hostapd_ctrl_iface_deauthenticate(struct hostapd_data *hapd,
 }
 
 int hostapd_ctrl_iface_acl_enable(struct hostapd_data *hapd,
-				    const char *txtaddr)
+				    const char *acl_mode)
 {
-    int ap_acl_enable = atoi(txtaddr);
+    int ap_acl_enable = atoi(acl_mode);
     if (ap_acl_enable) {
         hapd->conf->mac_acl_disable = false;
         //printf(">>>>> hostapd_ctrl_iface_acl_enable enable\r\n");

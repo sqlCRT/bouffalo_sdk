@@ -7,7 +7,7 @@
 #include <bl702l_phy.h>
 #endif
 
-#ifdef CONFIG_BOUFFALO_SDK
+#ifdef BOUFFALO_SDK
 #include <bflb_common.h>
 #include <bflb_l1c.h>
 #include <bflb_efuse.h>
@@ -26,9 +26,6 @@
 #include <openthread/platform/alarm-micro.h>
 #include <openthread_port.h>
 #include <ot_radio_trx.h>
-#if OT_RADIO_CSL_DEBUG
-#include <lmac154_dbg.h>
-#endif
 
 #define VERSION_STRING_HELPER(x, y, z) #x "." #y "." #z
 #define VERSION_STRING(x, y, z) VERSION_STRING_HELPER(x, y, z)
@@ -92,6 +89,472 @@ void ot_radioSetInstance(otInstance *instance)
     ot_radio_ctx.instance = instance;
 }
 
+#if OT_RADIO_CSL_DEBUG
+/* cumulative accuracy stats of frames received with CSL enabled */
+typedef struct {
+    uint32_t            cnt;
+    uint32_t            in_win;
+    uint32_t            err;
+    int32_t             dev_min_us;
+    int32_t             dev_max_us;
+    int64_t             dev_sum_us;
+    uint32_t            cnt16;          /* frames since the last stats line */
+    int64_t             dev_sum16_us;
+    uint32_t            edge_front_min_us;
+    uint32_t            edge_end_min_us;
+} ot_radio_csl_rx_stats_t;
+
+static ot_radio_csl_rx_stats_t ot_radio_csl_rx_stats;
+
+/* cumulative timing stats of our own csl-delayed transmissions (we acting as
+ * the csl transmitter, e.g. a parent sending to a sleepy child): actual tx
+ * time vs the programmed target */
+typedef struct {
+    uint32_t            cnt;
+    int32_t             dev_min_us;
+    int32_t             dev_max_us;
+    int64_t             dev_sum_us;
+} ot_radio_csl_tx_stats_t;
+
+static ot_radio_csl_tx_stats_t ot_radio_csl_tx_stats;
+
+/* per-tx timing record: filled by the tx-done ISR, printed by the radio task.
+ * only csl-delayed transmissions get a timing record - a csl receiver's own
+ * tx (reply, data poll) is not csl-scheduled and has no timing to verify.
+ * frames carrying a csl ie additionally report the next-rx-window phase they
+ * advertised (the peer schedules its csl tx from it) */
+typedef struct {
+    uint8_t             valid;
+    uint8_t             is_delayed;
+    uint8_t             acked;
+    uint8_t             seq;
+    uint8_t             has_phase;
+    uint16_t            ie_phase;       /* 10-symbol units, from lmac154_gen_csl_ie */
+    uint32_t            actual_sym;
+    uint32_t            expected_sym;
+    int32_t             drift_us;
+    uint32_t            desc_win_sym;   /* next-rx-window this frame advertised: sfd + phase*10 */
+    int32_t             desc_diff_us;   /* advertised window vs our sample grid, mod period */
+    int32_t             ie2sfd_us;      /* csl ie generation -> actual sfd (software tail latency) */
+    int16_t             comp_avg_sym;   /* tail compensation lmac154 applied to this frame */
+    int16_t             tail_sym;       /* this frame's measured raw software tail */
+} ot_radio_tx_dbg_t;
+
+static ot_radio_tx_dbg_t ot_radio_dbg_txd;
+
+/* child's next-window anchor inferred from the latest enh-ack we received
+ * (csl tx role): ack sfd (our rx timestamp of the ack) + the ie phase it
+ * carried. the csl tx ref print diffs its own data-frame-derived window
+ * against this anchor */
+static uint32_t ot_radio_dbg_ackref_sym;
+static uint8_t  ot_radio_dbg_ackref_valid;
+
+/* last armed CSL RX window, from otPlatRadioReceiveAt; symbol counts on the
+ * M154_SYM_CNT time base, channel in 11..26 */
+static uint32_t ot_radio_dbg_win_start_sym;
+static uint32_t ot_radio_dbg_win_end_sym;
+static uint8_t  ot_radio_dbg_win_channel;
+
+/* print the accumulated stats line once every so many frames */
+#define OT_RADIO_CSL_STATS_EVERY 16
+
+static inline void ot_radio_csl_tx_stats_update(ot_radio_csl_tx_stats_t *st, int32_t drift_us)
+{
+    st->cnt++;
+    if (st->cnt == 1 || drift_us < st->dev_min_us) {
+        st->dev_min_us = drift_us;
+    }
+    if (st->cnt == 1 || drift_us > st->dev_max_us) {
+        st->dev_max_us = drift_us;
+    }
+    st->dev_sum_us += drift_us;
+}
+
+static lmac154_ie_csl_t *ot_radio_find_csl_ie(uint32_t *frame, uint8_t len, uint8_t mac_hdr_size);
+
+/* radio task context: print the landing record of one received frame */
+static void ot_radio_dbg_print_rx(otRadio_rxFrame_t *pframe)
+{
+    ot_radio_rx_dbg_t       *d = &pframe->dbg;
+    ot_radio_csl_rx_stats_t *st = &ot_radio_csl_rx_stats;
+    char                    src_str[6];
+
+    if (!d->valid) {
+        return;
+    }
+    d->valid = 0;
+
+    if (d->has_csl_ie) {
+        /* pure csl transmitter: a frame from our sleepy child carrying its
+         * next-window advertisement - the reference we schedule from.
+         * ackref: same window derived from the child's latest enh-ack
+         * (our tx anchor); both mod the child period - 0 when they agree.
+         * computed only when the two anchors are close in time (within two
+         * periods) - a stale anchor folds into garbage */
+        uint32_t w_df_sym = d->sfd_sym + (uint32_t)d->csl_phase * 10;
+        int32_t  ackref_us = 0;
+
+        if (ot_radio_dbg_ackref_valid && d->csl_period) {
+            uint32_t period_sym = (uint32_t)d->csl_period * 10;
+            /* wrap-safe signed diff folded to +-period/2: whole periods fold
+             * out, what remains is the sub-period disagreement of the two
+             * advertisements */
+            int32_t  diff_sym = (int32_t)(w_df_sym - ot_radio_dbg_ackref_sym);
+
+            if (diff_sym > (int32_t)period_sym / 2) diff_sym -= (int32_t)period_sym;
+            else if (diff_sym < -(int32_t)period_sym / 2) diff_sym += (int32_t)period_sym;
+            ackref_us = diff_sym * (int32_t)LMAC154_US_PER_SYMBOL;
+        }
+        printf("csl tx ref: seq %u phase %u period %u sfd %lu ackref %+ldus\r\n",
+               d->seq, d->csl_phase, d->csl_period, d->sfd_sym, ackref_us);
+        return;
+    }
+
+    if (d->src_is_saddr) {
+        snprintf(src_str, sizeof(src_str), "%04x", d->src_saddr);
+    }
+    else {
+        snprintf(src_str, sizeof(src_str), "ext");
+    }
+
+    if (d->csl_period) {
+        /* ph: where the peer thinks our next rx window opens, relative to
+         * this frame (10-symbol units); compare with the real sample time.
+         * ackdiff: the window our enh-ack advertised vs the same grid */
+        printf("csl rx frame: sfd %lu src %s seq %u drift %ldus win %u edge[%ld %ld]us ack_ph %u ph %u ackdiff %+ldus ack_exec %+ldus\r\n",
+               d->sfd_sym, src_str, d->seq, d->drift_us, d->in_win, d->edge_start_us, d->edge_end_us,
+               d->ack_phase, d->csl_phase, d->ack_desc_diff_us, d->ack_exec_err_us);
+    }
+    else {
+        /* the peer (ot stack) never includes a csl ie in its frames - the
+         * child resyncs from the frame arrival timestamp instead. an OT
+         * parent frame without csl ie is EXPECTED, not a sync problem */
+        printf("csl rx frame: sfd %lu src %s seq %u drift %ldus win %u edge[%ld %ld]us ack_ph %u ackdiff %+ldus ack_exec %+ldus no peer csl ie\r\n",
+               d->sfd_sym, src_str, d->seq, d->drift_us, d->in_win, d->edge_start_us, d->edge_end_us,
+               d->ack_phase, d->ack_desc_diff_us, d->ack_exec_err_us);
+    }
+
+    if ((st->cnt % OT_RADIO_CSL_STATS_EVERY) == 0 && st->cnt16) {
+        printf("csl rx stats: n%lu win%lu/%lu err%lu dev[%ld %ld %ld]us dev16 %ldus edge_min[%lu %lu]us\r\n",
+               st->cnt, st->in_win, st->cnt, st->err,
+               st->dev_min_us, (int32_t)(st->dev_sum_us / st->cnt), st->dev_max_us,
+               (int32_t)(st->dev_sum16_us / st->cnt16),
+               st->edge_front_min_us, st->edge_end_min_us);
+        st->cnt16 = 0;
+        st->dev_sum16_us = 0;
+    }
+}
+
+/* radio task context: print the timing record of one transmission */
+static void ot_radio_dbg_print_tx(void)
+{
+    ot_radio_tx_dbg_t       *d = &ot_radio_dbg_txd;
+    ot_radio_csl_tx_stats_t *st = &ot_radio_csl_tx_stats;
+
+    if (!d->valid) {
+        return;
+    }
+    d->valid = 0;
+
+    if (d->is_delayed) {
+        /* csl transmitter: csl-delayed tx conformance against the target
+         * programmed by the scheduler */
+        printf("csl tx txd: seq %u expected %lu actual %lu drift %ldus ph %u tdev[%ld %ld]us\r\n",
+               d->seq, d->expected_sym, d->actual_sym, d->drift_us, d->ie_phase,
+               st->dev_min_us, st->dev_max_us);
+    }
+    else {
+        /* csl receiver: our own tx completed carrying the csl ie - the
+         * next-rx-window advertisement our peer schedules from; window opens
+         * ie_phase*160us after this frame. desc_win/diff: the advertised
+         * window time vs our executing sample grid (mod period, 0 expected
+         * up to the 160us ie phase resolution). ie2sfd: residual of the
+         * tail compensation; comp: compensation applied to this frame;
+         * tail: this frame's measured raw software tail (tail = comp +
+         * ie2sfd) */
+        printf("csl rx txd: seq %u ph %u (%luus) desc_win %lu diff %+ldus ie2sfd %+ldus comp %+ldus tail %+ldus\r\n",
+               d->seq, d->ie_phase, (uint32_t)d->ie_phase * (uint32_t)LMAC154_US_PER_SYMBOL * 10U,
+               d->desc_win_sym, d->desc_diff_us, d->ie2sfd_us,
+               (int32_t)d->comp_avg_sym * (int32_t)LMAC154_US_PER_SYMBOL,
+               (int32_t)d->tail_sym * (int32_t)LMAC154_US_PER_SYMBOL);
+    }
+}
+
+/* tx-done ISR context: fill the per-tx timing record, integer ops only */
+static void ot_radio_dbg_txd_capture(lmac154_tx_status_t tx_status)
+{
+    ot_radio_tx_dbg_t *d = &ot_radio_dbg_txd;
+    /** real sfd end time of sent packet: tx done time stamp - (pkt len + fcs len) * 2 - phy header len.
+     * pkt_length excludes fcs (the lmac writes phr = pkt_length + 2) */
+    uint32_t actual_sfd = (uint32_t)(lmac154_get_tx_done_timestamp() >> 4) - ((uint32_t)(ot_radio_ctx.tx_param.pkt_length + 2) << 1) - 2;
+
+    d->acked = (tx_status == LMAC154_TX_STATUS_ACKED);
+    d->seq = ot_radio_ctx.tx_frame->mPsdu[2];
+    d->actual_sym = actual_sfd;
+    d->expected_sym = 0;
+    d->drift_us = 0;
+    /* next-rx-window phase this frame advertised (10-symbol units) */
+    d->has_phase = (ot_radio_ctx.tx_param.csl_opt.csl_ie_offset != 0);
+    d->ie_phase = ot_radio_ctx.tx_param.csl_opt.dbg_csl_tx_phase;
+    if (!d->has_phase && ot_radio_ctx.tx_frame->mLength > 2) {
+        /* OT may have updated the header itself (mIsHeaderUpdated), in which
+         * case the platform skipped the ie search above - read the phase the
+         * frame actually advertises straight from the tx buffer */
+        lmac154_ie_csl_t *csl = ot_radio_find_csl_ie((uint32_t *)ot_radio_ctx.tx_frame->mPsdu,
+                ot_radio_ctx.tx_frame->mLength - 2,
+                (uint8_t)lmac154_get_mhr_len_2015((uint8_t *)ot_radio_ctx.tx_frame->mPsdu));
+        if (csl) {
+            d->has_phase = 1;
+            d->ie_phase = csl->bf.phase;
+        }
+    }
+
+    /* ie generation -> actual sfd residual: lmac154 pre-compensates the ie
+     * sfd estimate with its internally tracked software tail, so a value
+     * converged near zero here means the compensation is accurate */
+    d->ie2sfd_us = 0;
+    d->comp_avg_sym = (int16_t)ot_radio_ctx.tx_param.csl_opt.dbg_csl_ie_comp_avg;
+    d->tail_sym = 0;
+    if (d->has_phase && ot_radio_ctx.tx_param.csl_opt.dbg_sfd_est_sym) {
+        d->ie2sfd_us = (int32_t)(actual_sfd - ot_radio_ctx.tx_param.csl_opt.dbg_sfd_est_sym) * (int32_t)LMAC154_US_PER_SYMBOL;
+        d->tail_sym = (int16_t)ot_radio_ctx.tx_param.csl_opt.dbg_csl_ie_comp;
+    }
+
+    if (d->has_phase && ot_radio_ctx.tx_param.csl_opt.dbg_sfd_est_sym) {
+        /* the ie advertises our next rx window at sfd + phase*10 (symbols);
+         * wrap-safe signed diff vs our executing sample grid folded to
+         * +-period/2: exposes the phase rounding of lmac154_gen_csl_ie
+         * (ceil, 0..9 sym = 0..144us) plus any schedule drift. only for
+         * frames whose ie lmac154 generated - for ot-prebuilt ie frames
+         * (data poll) the platform sample copy is not the reference ot
+         * used */
+        uint32_t period_sym = (uint32_t)ot_radio_ctx.tx_param.csl_opt.csl_period * 10;
+        int32_t  diff_sym = (int32_t)(actual_sfd + (uint32_t)d->ie_phase * 10 - ot_radio_ctx.tx_param.csl_opt.csl_sample_time);
+
+        d->desc_win_sym = actual_sfd + (uint32_t)d->ie_phase * 10;
+        if (diff_sym > (int32_t)period_sym / 2) diff_sym -= (int32_t)period_sym;
+        else if (diff_sym < -(int32_t)period_sym / 2) diff_sym += (int32_t)period_sym;
+        d->desc_diff_us = diff_sym * (int32_t)LMAC154_US_PER_SYMBOL;
+    }
+    else {
+        d->desc_win_sym = 0;
+        d->desc_diff_us = 0;
+    }
+
+    /* only a csl-delayed transmission (we are the csl transmitter,
+     * e.g. parent sending into a sleepy child's window) has csl tx
+     * timing to verify; discriminate on the tx_timing actually
+     * programmed for THIS frame, not on our own csl_period, so a
+     * node that is csl receiver and csl transmitter at the same time
+     * is still measured correctly. positive drift = sent late. */
+    if (ot_radio_ctx.tx_param.tx_timing.base_time || ot_radio_ctx.tx_param.tx_timing.delay_time) {
+        uint32_t expected_shr = ot_radio_ctx.tx_param.tx_timing.base_time + ot_radio_ctx.tx_param.tx_timing.delay_time;
+        int32_t drift_us = (int32_t)(actual_sfd - expected_shr) << LMAC154_US_PER_SYMBOL_BITS;
+
+        d->valid = 1;
+        d->is_delayed = 1;
+        d->expected_sym = expected_shr;
+        d->drift_us = drift_us;
+        ot_radio_csl_tx_stats_update(&ot_radio_csl_tx_stats, drift_us);
+    }
+    else {
+        d->valid = d->has_phase;
+    }
+}
+
+/* rx-done ISR pass: snapshot the per-frame landing inputs. must run in this
+ * pass - the lmac switches back to the resume channel and reuses the mpdu
+ * buffer once the enh-ack exchange starts */
+static void ot_radio_dbg_rxd_capture(otRadio_rxFrame_t *rx_frame, lmac154_receiveInfo_t *info, uint32_t *frame)
+{
+    rx_frame->dbg.on_win_ch =
+        (lmac154_getChannel() + OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN) == ot_radio_dbg_win_channel;
+    rx_frame->dbg.seq = (uint8_t)(frame[0] >> 16);
+    rx_frame->dbg.src_is_saddr = info->is_src_saddr;
+    rx_frame->dbg.src_saddr = info->src_addr.saddr;
+    /* next-rx-window phase we just advertised to the peer in the enh-ack
+     * (10-symbol units), computed by lmac154_gen_csl_ie above; the actual
+     * advertisement error is measured at ACK_SENT in ot_radio_dbg_rxd_measure */
+    rx_frame->dbg.ack_phase = info->dbg_csl_ack_phase;
+    rx_frame->dbg.ack_desc_diff_us = 0;
+    rx_frame->dbg.ack_exec_err_us = 0;
+}
+
+/* radio task context helper: short name of the lmac rf state */
+static const char *ot_radio_dbg_rf_state(int rf_state)
+{
+    static const char * const names[] = {
+        "?", "rx_trig", "rx", "rx_doing", "ack", "tx", "csma", "idle"
+    };
+
+    if (rf_state <= 0 || (size_t)rf_state >= sizeof(names) / sizeof(names[0])) {
+        return names[0];
+    }
+    return names[rf_state];
+}
+
+/* radio task context: a csl-delayed transmission was just queued */
+static void ot_radio_dbg_print_send(const otRadioFrame *aFrame, int iret)
+{
+    printf("csl tx submit: seq %u base %lu delay %lu now %lu ret %d\r\n",
+           aFrame->mPsdu[2],
+           ot_radio_ctx.tx_param.tx_timing.base_time, ot_radio_ctx.tx_param.tx_timing.delay_time, zb_timer_get_current_time(), iret);
+}
+
+/* find the CSL IE of a 802.15.4-2015 frame, NULL when absent */
+static lmac154_ie_csl_t *ot_radio_find_csl_ie(uint32_t *frame, uint8_t len, uint8_t mac_hdr_size)
+{
+    uint16_t fcf = frame[0] & 0xFFFF;
+
+    if (!LMAC154_FRAME_IS_FRAME_2015(fcf) || !LMAC154_FRAME_IS_IE_EXIST(fcf)) {
+        return NULL;
+    }
+
+    uint8_t *ie_ptr = (uint8_t *)frame + mac_hdr_size;
+
+    /* skip aux security header if present */
+    if (fcf & LMAC154_FRAME_SECURITY_MASK) {
+        lmac154_aux_hdr_t *aux = (lmac154_aux_hdr_t *)ie_ptr;
+        static const uint8_t key_id_len[] = {0, 1, 5, 9};
+        uint8_t kid_mode = aux->key_id_mode;
+        if (kid_mode > 3) kid_mode = 3;
+        ie_ptr += sizeof(lmac154_aux_hdr_t) - sizeof(aux->key_id) + key_id_len[kid_mode];
+    }
+
+    while (ie_ptr + sizeof(lmac154_ie_hdr_t) <= (uint8_t *)frame + len) {
+        lmac154_ie_hdr_t *hdr = (lmac154_ie_hdr_t *)ie_ptr;
+        uint8_t ie_len = hdr->length;
+
+        if (ie_len == 0 || ie_ptr + sizeof(lmac154_ie_hdr_t) + ie_len > (uint8_t *)frame + len) {
+            break;
+        }
+
+        if (hdr->element_id == LMAC154_IE_CSL_ID && ie_len >= 4) {
+            return (lmac154_ie_csl_t *)ie_ptr;
+        }
+
+        ie_ptr += sizeof(lmac154_ie_hdr_t) + ie_len;
+    }
+    return NULL;
+}
+
+/* rx ACK_SENT ISR pass: measure where this frame landed against our csl
+ * sample time and the last armed window, update the cumulative stats and
+ * fill the frame's debug record for the radio task to print. integer ops
+ * only, no printing */
+static void ot_radio_dbg_rxd_measure(lmac154_receiveInfo_t *info, uint32_t *frame)
+{
+    uint32_t rx_sfd_sym = info->rx_done_symbol_cnt - ((uint32_t)(info->rx_length + 1) << 1);
+    ot_radio_rx_dbg_t *d = NULL;
+
+    if (!utils_dlist_empty(&ot_radio_ctx.frame_list)) {
+        /* the frame filled in the RX_DONE pass still sits at the head of
+         * the free list until it is queued for OpenThread below */
+        d = &((otRadio_rxFrame_t *)ot_radio_ctx.frame_list.next)->dbg;
+    }
+
+    if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
+        if (d) {
+            /* landing values against our csl sample time and the last
+             * armed window, plain integer ops only */
+            ot_radio_csl_rx_stats_t *st = &ot_radio_csl_rx_stats;
+            uint32_t period_sym = (uint32_t)ot_radio_ctx.tx_param.csl_opt.csl_period * 10;
+            uint32_t sample_phase = ot_radio_ctx.tx_param.csl_opt.csl_sample_time % period_sym;
+            uint32_t rx_phase = rx_sfd_sym % period_sym;
+            int32_t rx_drift_sym = (int32_t)(rx_phase - sample_phase);
+            int32_t win_edge_start = (int32_t)(rx_sfd_sym - ot_radio_dbg_win_start_sym) << LMAC154_US_PER_SYMBOL_BITS;
+            int32_t win_edge_end = (int32_t)(ot_radio_dbg_win_end_sym - rx_sfd_sym) << LMAC154_US_PER_SYMBOL_BITS;
+            int32_t drift_us;
+            lmac154_ie_csl_t *csl;
+
+            if (rx_drift_sym > (int32_t)(period_sym / 2)) rx_drift_sym -= period_sym;
+            if (rx_drift_sym < -(int32_t)(period_sym / 2)) rx_drift_sym += period_sym;
+            drift_us = rx_drift_sym << LMAC154_US_PER_SYMBOL_BITS;
+
+            /* in window: SFD inside the armed window and, per the RX_DONE
+             * pass, the radio was actually on the window channel (an arm
+             * deferred by an ongoing TX leaves the radio on the previous
+             * channel until the TX ends) */
+            d->valid = 1;
+            d->has_csl_ie = 0;
+            d->sfd_sym = rx_sfd_sym;
+            d->drift_us = drift_us;
+            d->edge_start_us = win_edge_start;
+            d->edge_end_us = win_edge_end;
+            d->in_win = (win_edge_start >= 0) && (win_edge_end >= 0) && d->on_win_ch;
+
+            /* the csl ie of a frame from our transmitter states where the
+             * peer thinks our next rx window opens - compare against the
+             * real sample time to expose the peer's reference error */
+            csl = ot_radio_find_csl_ie(frame, info->rx_length, info->mac_hdr_size);
+            if (csl) {
+                d->csl_phase = csl->bf.phase;
+                d->csl_period = csl->bf.period;
+            }
+            else {
+                d->csl_phase = 0;
+                d->csl_period = 0;
+            }
+
+            /* enh-ack execution vs its generation-time target and the true
+             * advertisement error: the ack ie was generated against
+             * est = rx_done + enh_ack_time + shr - 2, its actual sfd is
+             * reconstructed from the ack tx-done timestamp (dbg_ack_len is
+             * the phr length, fcs included) */
+            if (info->dbg_ack_len) {
+                uint32_t ack_sfd_sym = (lmac154_get_tx_done_timestamp() >> 4) - ((uint32_t)(info->dbg_ack_len) << 1) - 2;
+                uint32_t ack_est_sym = info->rx_done_symbol_cnt + info->enh_ack_time + LMAC154_SHR_LEN - 2;
+
+                d->ack_exec_err_us = (int32_t)(ack_sfd_sym - ack_est_sym) * (int32_t)LMAC154_US_PER_SYMBOL;
+
+                /* advertisement diff vs the sample grid, wrap-safe signed
+                 * and folded to +-period/2; data-plane frames only
+                 * (short-addr parent, attach-phase ext-addr frames excluded) */
+                if (d->ack_phase && d->src_is_saddr) {
+                    int32_t diff_sym = (int32_t)(ack_sfd_sym + (uint32_t)d->ack_phase * 10 - ot_radio_ctx.tx_param.csl_opt.csl_sample_time);
+
+                    if (diff_sym > (int32_t)period_sym / 2) diff_sym -= (int32_t)period_sym;
+                    else if (diff_sym < -(int32_t)period_sym / 2) diff_sym += (int32_t)period_sym;
+                    d->ack_desc_diff_us = diff_sym * (int32_t)LMAC154_US_PER_SYMBOL;
+                }
+            }
+
+            st->cnt++;
+            st->cnt16++;
+            st->dev_sum_us += drift_us;
+            st->dev_sum16_us += drift_us;
+            if (d->in_win) {
+                st->in_win++;
+                if (st->in_win == 1 || (uint32_t)win_edge_start < st->edge_front_min_us) {
+                    st->edge_front_min_us = win_edge_start;
+                }
+                if (st->in_win == 1 || (uint32_t)win_edge_end < st->edge_end_min_us) {
+                    st->edge_end_min_us = win_edge_end;
+                }
+            }
+            if (st->cnt == 1 || drift_us < st->dev_min_us) {
+                st->dev_min_us = drift_us;
+            }
+            if (st->cnt == 1 || drift_us > st->dev_max_us) {
+                st->dev_max_us = drift_us;
+            }
+        }
+    }
+    else if (d) {
+        lmac154_ie_csl_t *csl = ot_radio_find_csl_ie(frame, info->rx_length, info->mac_hdr_size);
+        if (csl) {
+            d->valid = 1;
+            d->has_csl_ie = 1;
+            d->in_win = 0;
+            d->sfd_sym = rx_sfd_sym;
+            d->csl_phase = csl->bf.phase;
+            d->csl_period = csl->bf.period;
+        }
+    }
+    info->dbg_csl_ack_phase = 0;
+}
+#endif
+
 void ot_radioTask(ot_system_event_t trxEvent)
 {
     otRadio_rxFrame_t   *pframe;
@@ -105,6 +568,12 @@ void ot_radioTask(ot_system_event_t trxEvent)
     if ((trxEvent & OT_SYSTEM_EVENT_RADIO_TX_ALL_MASK) && txframe) {
 
         ot_radio_ctx.tx_frame = NULL;
+
+#if OT_RADIO_CSL_DEBUG
+        /* print the tx timing record captured by the tx-done ISR; done here,
+         * in task context, before handing the event to OpenThread */
+        ot_radio_dbg_print_tx();
+#endif
 
         if (txframe) {
             if (trxEvent & OT_SYSTEM_EVENT_RADIO_TX_DONE_NO_ACK_REQ) {
@@ -136,6 +605,11 @@ void ot_radioTask(ot_system_event_t trxEvent)
         otrExitCrit(tag);
 
         if (pframe) {
+#if OT_RADIO_CSL_DEBUG
+            /* print the rx landing record captured by the rx-done ISR; done
+             * here, in task context, before handing the frame to OpenThread */
+            ot_radio_dbg_print_rx(pframe);
+#endif
             otPlatRadioReceiveDone(ot_radio_ctx.instance, &pframe->frame, OT_ERROR_NONE);
 
             tag = otrEnterCrit();
@@ -177,44 +651,6 @@ bool otr_isStackIdle(void)
     return false;
 }
 
-#if OT_RADIO_CSL_DEBUG
-static lmac154_ie_csl_t *ot_radio_find_csl_ie(uint32_t *frame, uint8_t len, uint8_t mac_hdr_size)
-{
-    uint16_t fcf = frame[0] & 0xFFFF;
-
-    if (!LMAC154_FRAME_IS_FRAME_2015(fcf) || !LMAC154_FRAME_IS_IE_EXIST(fcf)) {
-        return NULL;
-    }
-
-    uint8_t *ie_ptr = (uint8_t *)frame + mac_hdr_size;
-
-    /* skip aux security header if present */
-    if (fcf & LMAC154_FRAME_SECURITY_MASK) {
-        lmac154_aux_hdr_t *aux = (lmac154_aux_hdr_t *)ie_ptr;
-        static const uint8_t key_id_len[] = {0, 1, 5, 9};
-        uint8_t kid_mode = aux->key_id_mode;
-        if (kid_mode > 3) kid_mode = 3;
-        ie_ptr += sizeof(lmac154_aux_hdr_t) - sizeof(aux->key_id) + key_id_len[kid_mode];
-    }
-
-    while (ie_ptr + sizeof(lmac154_ie_hdr_t) <= (uint8_t *)frame + len) {
-        lmac154_ie_hdr_t *hdr = (lmac154_ie_hdr_t *)ie_ptr;
-        uint8_t ie_len = hdr->length;
-
-        if (ie_len == 0 || ie_ptr + sizeof(lmac154_ie_hdr_t) + ie_len > (uint8_t *)frame + len) {
-            break;
-        }
-
-        if (hdr->element_id == LMAC154_IE_CSL_ID && ie_len >= 4) {
-            return (lmac154_ie_csl_t *)ie_ptr;
-        }
-
-        ie_ptr += sizeof(lmac154_ie_hdr_t) + ie_len;
-    }
-    return NULL;
-}
-#endif
-
 /************************************ LMAC 15.4 event function ***********************************/
 void ot_radioTxDoneCallback (lmac154_tx_status_t tx_status, uint32_t * ack_frame, uint32_t ack_frame_len)
 {
@@ -238,6 +674,22 @@ void ot_radioTxDoneCallback (lmac154_tx_status_t tx_status, uint32_t * ack_frame
             arch_memcpy(ot_radio_ctx.rx_ack_frame->mPsdu, ack_frame, ack_frame_len);
             ot_radio_ctx.rx_ack_frame->mLength = ack_frame_len;
 
+#if OT_RADIO_CSL_DEBUG
+            {
+                /* child's next-window anchor from this enh-ack: the ack sfd
+                 * is measured by our own rx timestamp, the phase comes from
+                 * the ie the ack carried */
+                lmac154_ie_csl_t *csl = ot_radio_find_csl_ie((uint32_t *)ack_frame, ack_frame_len - 2,
+                        (uint8_t)lmac154_get_mhr_len_2015((uint8_t *)ack_frame));
+
+                if (csl) {
+                    ot_radio_dbg_ackref_sym = (ot_radio_ctx.tx_param.ack_rx_done_symbol_cnt - ((ack_frame_len + 1) << 1)) +
+                                              (uint32_t)csl->bf.phase * 10;
+                    ot_radio_dbg_ackref_valid = 1;
+                }
+            }
+#endif
+
             otrNotifyEvent(OT_SYSTEM_EVENT_RADIO_TX_ACKED);
         }
         else {
@@ -246,24 +698,7 @@ void ot_radioTxDoneCallback (lmac154_tx_status_t tx_status, uint32_t * ack_frame
 
 #if OT_RADIO_CSL_DEBUG
         if (tx_status == LMAC154_TX_STATUS_ACKED || tx_status == LMAC154_TX_STATUS_NO_ACK) {
-            uint32_t actual_shr = (uint32_t)(lmac154_get_tx_done_timestamp() >> 4) - (((uint32_t)ot_radio_ctx.tx_param.pkt_length + 1) << 1) - LMAC154_SHR_LEN;
-            if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
-                lmac154_dbg_trace("csl child txd: %ld, tx seq: %d %d, tx ts: %d, period: %lu, tx phase: %u, tx drift: %d\r\n",
-                        zb_timer_get_current_time(), ot_radio_ctx.tx_frame->mPsdu[2], tx_status, actual_shr,
-                        ot_radio_ctx.tx_param.csl_opt.csl_period, ot_radio_ctx.tx_param.csl_opt.csl_sample_time,
-                        ot_radio_ctx.tx_param.csl_opt.dbg_csl_tx_phase,
-                        ot_radio_ctx.tx_param.csl_opt.dbg_csl_drift_tx);
-            } 
-            else {
-                lmac154_ie_csl_t *csl = ot_radio_find_csl_ie(ack_frame, ack_frame_len, 3);
-                if (tx_status == LMAC154_TX_STATUS_ACKED && csl != NULL) {
-                    uint32_t expected_shr = ot_radio_ctx.tx_param.tx_timing.base_time + ot_radio_ctx.tx_param.tx_timing.delay_time;
-                    int32_t drift = expected_shr? (int32_t)(expected_shr - actual_shr) : 0;
-                    lmac154_dbg_trace("csl parent txd: %ld,  tx seq: %d, tx ts: %d, phase: %u, period: %lu, expected %lu, timing drift: %d sym\r\n",
-                        zb_timer_get_current_time(), ot_radio_ctx.tx_frame->mPsdu[2], actual_shr,
-                        csl->bf.phase, csl->bf.period, expected_shr, drift);
-                }
-            }
+            ot_radio_dbg_txd_capture(tx_status);
         }
 #endif
     }
@@ -335,7 +770,9 @@ static inline uint32_t ot_radio_prepare_enh_ack(lmac154_receiveInfo_t *rx_info, 
     uint8_t *p = ack_ptr + ack_len;
 #if OPENTHREAD_CONFIG_MAC_CSL_RECEIVER_ENABLE
     if (ot_radio_ctx.tx_param.csl_opt.csl_period > 0) {
-        uint32_t tx_sfd_sym = rx_info->rx_done_symbol_cnt + rx_info->enh_ack_time + LMAC154_SHR_LEN;
+        /* the hw fires the ack trigger 2 sym ahead of the programmed time
+         * (measured: ack sfd = rx_done + enh_ack_time + shr - 2) */
+        uint32_t tx_sfd_sym = rx_info->rx_done_symbol_cnt + rx_info->enh_ack_time + LMAC154_SHR_LEN - 2;
         rx_info->dbg_csl_ack_phase = lmac154_gen_csl_ie(ot_radio_ctx.tx_param.csl_opt.csl_period, ot_radio_ctx.tx_param.csl_opt.csl_sample_time, (lmac154_ie_csl_t *)p, tx_sfd_sym);
         p += sizeof(lmac154_ie_csl_t);
     }
@@ -363,7 +800,7 @@ static inline uint32_t ot_radio_prepare_enh_ack(lmac154_receiveInfo_t *rx_info, 
         ot_radio_ctx.enh_ack_sec.nonce.security_level = p_ack_aux->sec_lvl;
         ot_radio_ctx.frame_cnt.value ++;
 
-#if defined (CONFIG_BOUFFALO_SDK) && defined (BL616)
+#if defined (BOUFFALO_SDK) && defined (BL616)
         bflb_l1c_dcache_clean_invalidate_range(otRadio_ack_buff, sizeof(otRadio_ack_buff));
         ot_radio_ctx.enh_ack_sec.a_data = (uint32_t *)bflb_get_no_cache_addr(ack_ptr);
         ot_radio_ctx.enh_ack_sec.c_data = (uint32_t *)bflb_get_no_cache_addr(otRadio_ack_buff);
@@ -389,6 +826,7 @@ static inline uint32_t ot_radio_prepare_enh_ack(lmac154_receiveInfo_t *rx_info, 
     return ack_len;
 }
 
+
 void ot_radioRxDoneCallback(lmac154_rx_status_t status, lmac154_receiveInfo_t *info, uint32_t *frame)
 {
     otRadio_rxFrame_t *     rx_frame = NULL;
@@ -400,18 +838,18 @@ void ot_radioRxDoneCallback(lmac154_rx_status_t status, lmac154_receiveInfo_t *i
         return;
     }
 
-    if (LMAC154_RX_STATUS_RX_DONE == status) {
-#if OT_RADIO_CSL_DEBUG
-        if (info->rx_error) {
-            if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
-                lmac154_dbg_trace("csl child rx error: %ld,  mpdu: %08lx, rx ts: %d, error: %x\r\n",
-                        zb_timer_get_current_time(), frame[0], info->rx_done_symbol_cnt - ((uint32_t)(info->rx_length + 1) << 1), info->rx_error);
-            }
-            return;
-        }
-#endif
+    /* A frame received while transmitting carries no frame payload. */
+    if (LMAC154_RX_STATUS_ERR_RX_IN_TX == status || frame == NULL) {
+        return;
+    }
 
+    if (LMAC154_RX_STATUS_RX_DONE == status) {
         if (info->rx_error) {
+#if OT_RADIO_CSL_DEBUG
+            if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
+                ot_radio_csl_rx_stats.err++;
+            }
+#endif
             return;
         }
 
@@ -439,38 +877,20 @@ void ot_radioRxDoneCallback(lmac154_rx_status_t status, lmac154_receiveInfo_t *i
 
         rx_frame->frame.mInfo.mRxInfo.mRssi = rssi;
         rx_frame->frame.mInfo.mRxInfo.mLqi = lqi;
-        rx_frame->frame.mChannel = lmac154_getChannel();
+        rx_frame->frame.mChannel = lmac154_getChannel() + OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN;
         rx_frame->frame.mLength = info->rx_length;
         rx_frame->frame.mInfo.mRxInfo.mAckedWithFramePending = info->is_frame_pended;
         rx_frame->frame.mInfo.mRxInfo.mAckedWithSecEnhAck =
             info->is_enh_ack_requested && (frame[0] & LMAC154_FRAME_SECURITY_MASK);
+
+#if OT_RADIO_CSL_DEBUG
+        ot_radio_dbg_rxd_capture(rx_frame, info, frame);
+#endif
     }
 
     if (LMAC154_RX_STATUS_ACK_SENT == status || !info->is_tx_acking) {
 #if OT_RADIO_CSL_DEBUG
-        uint32_t rx_sfd_sym = info->rx_done_symbol_cnt - ((uint32_t)(info->rx_length + 1) << 1);
-        if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
-            uint32_t actual_shr = (uint32_t)(lmac154_get_tx_done_timestamp() >> 4) - (((uint32_t)ot_radio_ctx.tx_param.pkt_length + 1) << 1) - LMAC154_SHR_LEN;
-            uint32_t period_sym = (uint32_t)ot_radio_ctx.tx_param.csl_opt.csl_period * 10;
-            uint32_t sample_phase = ot_radio_ctx.tx_param.csl_opt.csl_sample_time % period_sym;
-            uint32_t rx_phase = rx_sfd_sym % period_sym;
-            int32_t rx_drift_sym = (int32_t)(rx_phase - sample_phase);
-            if (rx_drift_sym > (int32_t)(period_sym / 2)) rx_drift_sym -= period_sym;
-            if (rx_drift_sym < -(int32_t)(period_sym / 2)) rx_drift_sym += period_sym;
-            lmac154_dbg_trace("csl child rxd: %ld, seq: %u, acked: %u, period: %lu, ack phase: %u, sample time: %lu, rxd: %lu, ack drift: %d, rx drift: %d sym\r\n",
-                   zb_timer_get_current_time(), (uint8_t)(frame[0] >> 16), actual_shr,
-                   ot_radio_ctx.tx_param.csl_opt.csl_period, info->dbg_csl_ack_phase, ot_radio_ctx.tx_param.csl_opt.csl_sample_time, rx_sfd_sym, 
-                   info->dbg_csl_drift_ack, rx_drift_sym);
-        }
-        else {
-            lmac154_ie_csl_t *csl = ot_radio_find_csl_ie(frame, info->rx_length, info->mac_hdr_size);
-            if (csl) {
-                lmac154_dbg_trace("csl parent rxd: %d seq: %u, phase: %u, period: %u, rxd: %ld",
-                    zb_timer_get_current_time(), (uint8_t)(frame[0] >> 16),
-                    csl->bf.phase, csl->bf.period, rx_sfd_sym);
-            }
-        }
-        info->dbg_csl_ack_phase = 0;
+        ot_radio_dbg_rxd_measure(info, frame);
 #endif
 
         if (utils_dlist_empty(&ot_radio_ctx.frame_list)) {
@@ -520,6 +940,9 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
     ot_radio_ctx.tx_param.tx_timing.delay_time = 0;
     ot_radio_ctx.tx_param.csl_opt.csl_ie_offset = 0;
 #if OT_RADIO_CSL_DEBUG
+    ot_radio_ctx.tx_param.csl_opt.dbg_csl_tx_phase = 0;
+#endif
+#if CONFIG_LMAC154_DBG
     ot_radio_ctx.tx_param.dbg_plat_entry_sym = zb_timer_get_current_time();
 #endif
 
@@ -575,6 +998,11 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
             aFrame->mInfo.mTxInfo.mIsHeaderUpdated = true;
         }
     }
+    else if (ot_radio_ctx.tx_param.csl_opt.csl_period > 0) {
+        /* ot built the ie itself - the lmac will not regenerate it, so no
+         * fresh sfd estimate exists for the ie2sfd statistic */
+        ot_radio_ctx.tx_param.csl_opt.dbg_sfd_est_sym = 0;
+    }
 #endif
     if (ot_radio_ctx.tx_param.is_tx_security) {
         aFrame->mInfo.mTxInfo.mIsHeaderUpdated = true;
@@ -585,7 +1013,7 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
         }
         ot_radio_ctx.tx_param.sec.m_data_length = ot_radio_ctx.tx_param.pkt_length - ot_radio_ctx.tx_param.sec.a_data_length;
 
-#if defined (CONFIG_BOUFFALO_SDK) && defined (BL616)
+#if defined (BOUFFALO_SDK) && defined (BL616)
         bflb_l1c_dcache_clean_invalidate_range(otRadio_tx_buff, sizeof(otRadio_tx_buff));
         ot_radio_ctx.tx_param.sec.a_data = (uint32_t *)bflb_get_no_cache_addr(a_data);
         ot_radio_ctx.tx_param.sec.m_data = (uint32_t *)bflb_get_no_cache_addr(m_data);
@@ -619,12 +1047,21 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
 
         uint32_t base_symbol = zb_timer_get_current_time();
 
-        ot_radio_ctx.tx_param.tx_timing.delay_time = (aFrame->mInfo.mTxInfo.mTxDelay >> ZB_TIMER_BITNUM_PER_TICK) - 
-                                                     ((uint32_t)(base_symbol & 0xfffffff) - 
-                                                     ((uint32_t)(aFrame->mInfo.mTxInfo.mTxDelayBaseTime >> ZB_TIMER_BITNUM_PER_TICK)) - LMAC154_SHR_LEN);
+        ot_radio_ctx.tx_param.tx_timing.delay_time = (aFrame->mInfo.mTxInfo.mTxDelay >> ZB_TIMER_BITNUM_PER_TICK) -
+                                                     ((uint32_t)(base_symbol & 0xfffffff) -
+                                                     ((uint32_t)(aFrame->mInfo.mTxInfo.mTxDelayBaseTime >> ZB_TIMER_BITNUM_PER_TICK)));
         ot_radio_ctx.tx_param.tx_timing.base_time = base_symbol;
-        if (ot_radio_ctx.tx_param.tx_timing.delay_time > (OPENTHREAD_CONFIG_MAC_CSL_REQUEST_AHEAD_US >> ZB_TIMER_BITNUM_PER_TICK)) {
+
+        if (ot_radio_ctx.tx_param.tx_timing.delay_time > ((OPENTHREAD_CONFIG_MAC_CSL_REQUEST_AHEAD_US >> ZB_TIMER_BITNUM_PER_TICK) * 2)) {
             iret = -255;
+        }
+
+        int rf_state = lmac154_getRFState();
+        if (rf_state == LMAC154_RF_STATE_RX_DOING) {
+            iret = -254;
+        }
+        if (rf_state == LMAC154_RF_STATE_ACK_DOING) {
+            iret = -253;
         }
     }
 
@@ -633,10 +1070,11 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
     }
     otrExitCrit(tag);
 #if OT_RADIO_CSL_DEBUG
-    lmac154_dbg_trace("csl send: %ld, seq: %u, period: %lu, sample time: %lu, %s, %d\r\n",
-           zb_timer_get_current_time(), aFrame->mPsdu[2], 
-           ot_radio_ctx.tx_param.csl_opt.csl_period, ot_radio_ctx.tx_param.csl_opt.csl_sample_time,
-           LMAC154_FRAME_IS_CMD(fcf)? "cmd": "data", iret);
+    /* only csl-delayed (scheduled) transmissions: plain frames would print
+     * for every packet this device sends */
+    if (aFrame->mInfo.mTxInfo.mTxDelayBaseTime || aFrame->mInfo.mTxInfo.mTxDelay) {
+        ot_radio_dbg_print_send(aFrame, iret);
+    }
 #endif
 
     if (iret >= 0) {
@@ -649,9 +1087,9 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
     return OT_ERROR_NONE;
 }
 
-otRadioCaps otPlatRadioGetCaps(otInstance *aInstance) 
+otRadioCaps otPlatRadioGetCaps(otInstance *aInstance)
 {
-    return OT_RADIO_CAPS_ACK_TIMEOUT | OT_RADIO_CAPS_CSMA_BACKOFF | OT_RADIO_CAPS_SLEEP_TO_TX | OT_RADIO_CAPS_TRANSMIT_TIMING | OT_RADIO_CAPS_TRANSMIT_SEC; 
+    return OT_RADIO_CAPS_ACK_TIMEOUT | OT_RADIO_CAPS_CSMA_BACKOFF | OT_RADIO_CAPS_SLEEP_TO_TX | OT_RADIO_CAPS_TRANSMIT_TIMING | OT_RADIO_CAPS_TRANSMIT_SEC | OT_RADIO_CAPS_RECEIVE_TIMING;
 }
 
 const char *otPlatRadioGetVersionString(otInstance *aInstance) 
@@ -674,7 +1112,7 @@ int8_t otPlatRadioGetReceiveSensitivity(otInstance *aInstance)
 
 void otPlatRadioGetIeeeEui64(otInstance *aInstance, uint8_t *aIeeeEui64) 
 {
-#ifdef CONFIG_BOUFFALO_SDK
+#ifdef BOUFFALO_SDK
     int i;
     uint32_t flash_id = 0;
 
@@ -845,9 +1283,64 @@ bool otPlatRadioIsEnabled(otInstance *aInstance)
     return !lmac154_isDisabled();
 }
 
-otError otPlatRadioReceive(otInstance *aInstance, uint8_t aChannel) 
+otError otPlatRadioReceiveAt(otInstance *aInstance, uint8_t aChannel,
+                             uint32_t aStart, uint32_t aDuration)
 {
-    uint8_t ch = lmac154_getChannel();
+    uint32_t now_us;
+    int32_t delta_end_us;
+    int ret;
+#if OT_RADIO_CSL_DEBUG
+    /* sample before arming: lmac154_enableRxTimed turns the radio on and
+     * would always report rx afterwards. the entry state explains how the
+     * arm resolved (idle: immediate, tx/csma: deferred, rx: window overlay) */
+    int rf_state = (int)lmac154_getRFState();
+#endif
+
+    OT_UNUSED_VARIABLE(aInstance);
+
+    now_us = zb_timer_get_current_time() << ZB_TIMER_BITNUM_PER_TICK;
+    delta_end_us = (int32_t)(aStart + aDuration - now_us);
+    if (delta_end_us < 0) {
+#if OT_RADIO_CSL_DEBUG
+        if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
+            printf("csl rx win late: %ld ch%d start %lu dur %lu now %lu rf %s\r\n",
+                    zb_timer_get_current_time(), aChannel, aStart, aDuration, now_us,
+                    ot_radio_dbg_rf_state(rf_state));
+        }
+#endif
+        return OT_ERROR_FAILED; /* window end already passed */
+    }
+
+    uint32_t tag = otrEnterCrit();
+    ret = lmac154_enableRxTimed(delta_end_us >> ZB_TIMER_BITNUM_PER_TICK,
+                                aChannel - OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN);
+    otrExitCrit(tag);
+
+#if OT_RADIO_CSL_DEBUG
+    if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
+        if (ret == 0) {
+            ot_radio_dbg_win_start_sym = aStart >> ZB_TIMER_BITNUM_PER_TICK;
+            ot_radio_dbg_win_end_sym = (aStart + aDuration) >> ZB_TIMER_BITNUM_PER_TICK;
+            ot_radio_dbg_win_channel = aChannel;
+        }
+        printf("csl rx win: %ld ch%d start %lu dur %lu now %lu ret %d rf %s\r\n",
+                zb_timer_get_current_time(), aChannel, aStart, aDuration, now_us, ret,
+                ot_radio_dbg_rf_state(rf_state));
+    }
+#endif
+
+    return (ret == 0) ? OT_ERROR_NONE : OT_ERROR_FAILED;
+}
+
+otError otPlatRadioReceive(otInstance *aInstance, uint8_t aChannel)
+{
+    uint8_t ch = aChannel - OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN;
+
+#if OPENTHREAD_CONFIG_MAC_CSL_RECEIVER_ENABLE
+    uint32_t tag = otrEnterCrit();
+    lmac154_disableRxTimed(ch);
+    otrExitCrit(tag);
+#endif
 
 #if (OPENTHREAD_FTD) || (OPENTHREAD_MTD)
     if (lmac154_isRxStateWhenIdle() != otThreadGetLinkMode(aInstance).mRxOnWhenIdle) {
@@ -855,25 +1348,11 @@ otError otPlatRadioReceive(otInstance *aInstance, uint8_t aChannel)
     }
 #endif
 
-    if (ch != (aChannel - OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN)) {
-
+    if (lmac154_getChannel() != ch) {
         lmac154_disableRx();
-
-        ch = aChannel - OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN;
         lmac154_setChannel(ch);
-
-#if defined BL702L
-        bz_phy_optimize_tx_channel(2405 + 5 * ch);
-#endif
     }
-
     lmac154_enableRx();
-
-#if OT_RADIO_CSL_DEBUG
-    if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
-        lmac154_dbg_trace("m154_rx_open %10ld ch%d %d\n", zb_timer_get_current_time(), aChannel, lmac154_getRFState());
-    }
-#endif
 
     return OT_ERROR_NONE;
 }
@@ -881,34 +1360,20 @@ otError otPlatRadioReceive(otInstance *aInstance, uint8_t aChannel)
 otError otPlatRadioSleep(otInstance *aInstance)
 {
     bool is_rx_on_when_idle = false;
-#if (OPENTHREAD_FTD) || (OPENTHREAD_MTD)
-    is_rx_on_when_idle = otThreadGetLinkMode(aInstance).mRxOnWhenIdle;
-#endif
-    lmac154_setRxStateWhenIdle(is_rx_on_when_idle);
 
 #if OPENTHREAD_CONFIG_MAC_CSL_RECEIVER_ENABLE
     uint32_t tag = otrEnterCrit();
-    lmac154_rf_state_t rf_state = lmac154_getRFState();
-    if (!is_rx_on_when_idle && ot_radio_ctx.tx_param.csl_opt.csl_period) {
-
-        /* Skip disableRx if RF is busy receiving to avoid truncating
-         * an in-progress frame. This allows OPENTHREAD_CONFIG_MIN_RECEIVE_ON_AFTER
-         * to cover the actual frame reception time rather than being cut short
-         * by the timer-based sleep. */
-        if (rf_state != LMAC154_RF_STATE_RX_DOING && rf_state != LMAC154_RF_STATE_ACK_DOING) {
-            lmac154_disableRx();
-        }
-    }
+    lmac154_disableRxTimed(lmac154_getChannel());
     otrExitCrit(tag);
-#if OT_RADIO_CSL_DEBUG
-    if (ot_radio_ctx.tx_param.csl_opt.csl_period) {
-        lmac154_dbg_trace("m154_rx_sleep %10ld %d=>%d ts=%ld",
-            zb_timer_get_current_time(), rf_state, lmac154_getRFState(), ot_radio_ctx.tx_param.csl_opt.csl_sample_time);
-    }
 #endif
-#else
+
+#if (OPENTHREAD_FTD) || (OPENTHREAD_MTD)
+    is_rx_on_when_idle = otThreadGetLinkMode(aInstance).mRxOnWhenIdle;
+#endif
+
+    lmac154_setRxStateWhenIdle(is_rx_on_when_idle);
     lmac154_disableRx();
-#endif
+
     return OT_ERROR_NONE;
 }
 
@@ -1006,11 +1471,6 @@ bool otPlatRadioIsCoexEnabled(otInstance *aInstance)
 {
     (void)aInstance;
     return lmac154_isCoexEnabled();
-}
-
-otError otPlatRadioReceiveAt(otInstance *aInstance, uint8_t aChannel, uint32_t aStart, uint32_t aDuration)
-{
-    return OT_ERROR_NOT_IMPLEMENTED;
 }
 
 #if OPENTHREAD_CONFIG_MAC_CSL_RECEIVER_ENABLE

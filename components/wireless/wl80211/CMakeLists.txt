@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-if(DEFINED PROJECT_SDK_VERSION)
+if(DEFINED CONFIG_PROJECT_SDK_VERSION)
     sdk_generate_library(wl80211_plat)
     sdk_add_private_compile_options(-Wno-unused-function)
     sdk_add_private_compile_options(-Wno-unused-variable)
@@ -23,7 +23,7 @@ if(DEFINED PROJECT_SDK_VERSION)
     sdk_add_private_include_directories(${CMAKE_CURRENT_SOURCE_DIR}/macsw)
 
     if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src)
-        sdk_add_static_library(${SDK_DEMO_PATH}/${BUILD_DIR}/build_wl80211/src/libwl80211_${CHIP}.a)
+        sdk_add_static_library(${CMAKE_BINARY_DIR}/build_wl80211/src/libwl80211_${CHIP}.a)
     else ()
         if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/lib/libwl80211_${CHIP}.a)
             sdk_add_static_library(lib/libwl80211_${CHIP}.a)

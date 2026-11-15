@@ -165,7 +165,7 @@ int eth_emac_init(void)
     int ret;
 
     /* emac init */
-    emac0 = bsp_emac_get_device(BSP_EMAC_RMII_DEFAULT_PORT);
+    emac0 = bsp_emac_get_device(0);
     if (emac0 == NULL) {
         LOG_E("device_get error\r\n");
         return -1;
@@ -175,13 +175,13 @@ int eth_emac_init(void)
     // bflb_emac_feature_control(emac0, EMAC_CMD_SET_RX_PROMISCUOUS, false);
 
     /* scan eth_phy */
-    phy_ctrl.mac_mdio_dev = bsp_emac_get_device(BSP_EMAC_MDIO_DEFAULT_PORT);
+    phy_ctrl.mac_mdio_dev = bsp_emac_get_device(0);
     if (phy_ctrl.mac_mdio_dev == NULL) {
         LOG_E("mdio device_get error\r\n");
         return -1;
     }
 
-    ret = eth_phy_scan(&phy_ctrl, BSP_EMAC_PHY_DEFAULT_SCAN_START, BSP_EMAC_PHY_DEFAULT_SCAN_END);
+    ret = eth_phy_scan(&phy_ctrl, EPHY_ADDR_MIN, EPHY_ADDR_MAX);
     if (ret < 0) {
         return -2;
     }
@@ -325,9 +325,9 @@ bool eth_link_state_update(void)
 #if (defined(EMAC_SPEED_10M_SUPPORT) && EMAC_SPEED_10M_SUPPORT)
         /* 10M/100M speed mode */
         if (speed == EPHY_SPEED_MODE_10M_HALF_DUPLEX || speed == EPHY_SPEED_MODE_10M_FULL_DUPLEX) {
-            bflb_emac_feature_control(emac0, EMAC_CMD_SET_SPEED_10M, NULL);
+            bflb_emac_feature_control(emac0, EMAC_CMD_SET_SPEED_10M, 0);
         } else {
-            bflb_emac_feature_control(emac0, EMAC_CMD_SET_SPEED_100M, NULL);
+            bflb_emac_feature_control(emac0, EMAC_CMD_SET_SPEED_100M, 0);
         }
 #endif
         /* enable full duplex mode */

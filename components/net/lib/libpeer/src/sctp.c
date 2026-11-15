@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "dtls_srtp.h"
+#include "ports.h"
 #include "sctp.h"
 #include "utils.h"
 #if CONFIG_USE_USRSCTP
@@ -82,18 +83,559 @@ uint32_t crc32c(uint32_t crc, const uint8_t* data, unsigned int length) {
 }
 
 static uint32_t sctp_get_checksum(Sctp* sctp, const uint8_t* buf, size_t len) {
+  (void)sctp;
   uint32_t crc = crc32c(0xffffffff, buf, len);
   return crc;
 }
 
-static int sctp_outgoing_data_cb(void* userdata, void* buf, size_t len, uint8_t tos, uint8_t set_df) {
-  Sctp* sctp = (Sctp*)userdata;
+static int sctp_send_packet(Sctp* sctp, const uint8_t* packet,
+                            size_t packet_size) {
+  if (sctp->send_packet) {
+    return sctp->send_packet(sctp->send_packet_user_data,
+                             packet, packet_size);
+  }
+  if (!sctp->dtls_srtp) {
+    return -1;
+  }
+  return dtls_srtp_write(sctp->dtls_srtp, packet, packet_size);
+}
 
-  dtls_srtp_write(sctp->dtls_srtp, buf, len);
+static void sctp_send_pending_acks(Sctp* sctp);
+
+#if !CONFIG_USE_USRSCTP
+#define SCTP_TX_WINDOW ((unsigned)CONFIG_SCTP_TX_WINDOW)
+#define SCTP_RX_WINDOW ((unsigned)CONFIG_SCTP_RX_WINDOW)
+#define SCTP_RETRY_MS ((unsigned)CONFIG_SCTP_DATA_RETRY_MS)
+#define SCTP_RETRY_LIMIT ((unsigned)CONFIG_SCTP_DATA_RETRY_LIMIT)
+
+typedef struct SctpTxPacket {
+  struct SctpTxPacket *next;
+  uint32_t tsn;
+  uint32_t sent_at;
+  unsigned int retries;
+  size_t length;
+  uint8_t data[];
+} SctpTxPacket;
+
+typedef struct SctpRxChunk {
+  struct SctpRxChunk *next;
+  uint32_t tsn;
+  size_t length;
+  size_t capacity;
+  int forward_ready;
+  int discarded;
+  uint8_t data[];
+} SctpRxChunk;
+
+static int sctp_drain_rx(Sctp* sctp);
+static void sctp_compact_rx_prefix(Sctp* sctp);
+static size_t sctp_build_sack(Sctp* sctp);
+
+#define SCTP_RETRY_BASE_MS 500U
+#define SCTP_RETRY_MAX_DELAY_MS 4000U
+#define SCTP_RETRY_MAX_RETRANSMISSIONS 5U
+#define SCTP_RETRY_DEADLINE_MS 20000U
+
+static void sctp_retry_clear(Sctp* sctp) {
+  sctp->retry_packet.kind = SCTP_RETRY_NONE;
+  sctp->retry_packet.size = 0;
+}
+
+static void sctp_retry_clear_handshake(Sctp* sctp) {
+  if (sctp->retry_packet.kind == SCTP_RETRY_INIT ||
+      sctp->retry_packet.kind == SCTP_RETRY_COOKIE_ECHO) {
+    sctp_retry_clear(sctp);
+  }
+}
+
+static int sctp_retry_store(Sctp* sctp, SctpRetryKind kind,
+                            const uint8_t* packet, size_t size,
+                            uint16_t sid) {
+  SctpRetryPacket* retry = &sctp->retry_packet;
+  if (size > sizeof(retry->packet)) return -1;
+  if (kind == SCTP_RETRY_DCEP_OPEN) {
+    int slot = -1;
+    for (int i = 0; i < SCTP_MAX_STREAMS; ++i) {
+      if (sctp->dcep_retries[i] && sctp->dcep_retries[i]->sid == sid) return -1;
+      if (!sctp->dcep_retries[i] && slot < 0) slot = i;
+    }
+    if (slot < 0) return -1;
+    retry = calloc(1, sizeof(*retry));
+    if (!retry) return -1;
+    sctp->dcep_retries[slot] = retry;
+  }
+  memcpy(retry->packet, packet, size);
+  retry->size = size;
+  retry->started_ms = ports_get_epoch_time();
+  retry->last_sent_ms = retry->started_ms;
+  retry->sid = sid;
+  retry->retries = 0;
+  retry->kind = kind;
   return 0;
 }
 
+static int sctp_ack_channel(Sctp* sctp, uint16_t sid) {
+  for (int i = 0; i < SCTP_MAX_STREAMS; ++i) {
+    if (sctp->dcep_retries[i] && sctp->dcep_retries[i]->sid == sid) {
+      free(sctp->dcep_retries[i]);
+      sctp->dcep_retries[i] = NULL;
+      return 1;
+    }
+  }
+  return 0; /* Unsolicited/late ACK cannot open an unknown/failed channel. */
+}
+#endif
+
+void sctp_poll(Sctp* sctp, uint32_t now_ms) {
+#if CONFIG_USE_USRSCTP
+  if (sctp && sctp->connected) sctp_send_pending_acks(sctp);
+  (void)now_ms;
+#else
+  SctpRetryPacket* retry;
+  uint32_t delay_ms;
+
+  if (!sctp) {
+    return;
+  }
+  if (sctp->connected) sctp_send_pending_acks(sctp);
+  if (sctp->connected && sctp->rx_head) {
+    unsigned int queued = sctp->rx_count;
+    sctp_compact_rx_prefix(sctp);
+    if (sctp_drain_rx(sctp) < 0) {
+      sctp_destroy_association(sctp);
+      if (sctp->onclose) sctp->onclose(sctp->userdata);
+      return;
+    }
+    if (sctp->connected && sctp->rx_count < queued) sctp->rx_sack_pending = 1;
+  }
+  if (sctp->connected && sctp->rx_sack_pending) {
+    size_t length = sctp_build_sack(sctp);
+    SctpHeader* header = (SctpHeader*)sctp->buf;
+    header->source_port = htons(sctp->local_port);
+    header->destination_port = htons(sctp->remote_port);
+    header->verification_tag = sctp->verification_tag;
+    header->checksum = sctp_get_checksum(sctp, sctp->buf, length);
+    sctp->rx_sack_pending = 0;
+    if (sctp_send_packet(sctp, sctp->buf, length) < 0 && sctp->connected)
+      sctp->rx_sack_pending = 1;
+  }
+  unsigned int budget = 2;
+  while (budget--) {
+    SctpTxPacket* packet = sctp->tx_head;
+    while (packet && (uint32_t)(now_ms - packet->sent_at) < SCTP_RETRY_MS)
+      packet = packet->next;
+    if (!packet) break;
+    if (packet->retries++ >= SCTP_RETRY_LIMIT) {
+      sctp->data_retry_exhaustions++;
+      sctp_destroy_association(sctp);
+      if (sctp->onclose) sctp->onclose(sctp->userdata);
+      return;
+    }
+    packet->sent_at = now_ms;
+    sctp->data_retransmissions++;
+    /* A synchronous transport hook may retire this copy in its SACK callback. */
+    sctp_send_packet(sctp, packet->data, packet->length);
+  }
+  /* Handshake owns its fixed slot; each channel owns a separate heap slot.
+   * A synchronous send hook may deliver an ACK and free the current slot. */
+  for (int slot = -1; slot < SCTP_MAX_STREAMS; ++slot) {
+    retry = slot < 0 ? &sctp->retry_packet : sctp->dcep_retries[slot];
+    if (!retry || retry->kind == SCTP_RETRY_NONE) continue;
+    if (retry->retries >= SCTP_RETRY_MAX_RETRANSMISSIONS ||
+        now_ms - retry->started_ms >= SCTP_RETRY_DEADLINE_MS) {
+      int association_failed = retry->kind != SCTP_RETRY_DCEP_OPEN;
+      if (!association_failed) {
+        const SctpDataChunk* open = (const SctpDataChunk*)(retry->packet + sizeof(SctpHeader));
+        /* An unacknowledged reliable OPEN leaves a TSN gap for every stream.
+         * Only a delivered OPEN lacking DCEP ACK can fail independently. */
+        association_failed = !sctp->tx_cumulative_tsn_ack_valid ||
+            (int32_t)(sctp->tx_cumulative_tsn_ack - ntohl(open->tsn)) < 0;
+      }
+      LOGW("SCTP control retry exhausted kind=%u sid=%u",
+           (unsigned)retry->kind, retry->sid);
+      if (slot < 0) sctp_retry_clear(sctp);
+      else { free(retry); sctp->dcep_retries[slot] = NULL; }
+      /* A missing DCEP ACK after cumulative SCTP delivery fails one channel. */
+      if (association_failed) {
+        sctp_destroy_association(sctp);
+        if (sctp->onclose) sctp->onclose(sctp->userdata);
+        return;
+      }
+      continue;
+    }
+    delay_ms = SCTP_RETRY_BASE_MS << retry->retries;
+    if (delay_ms > SCTP_RETRY_MAX_DELAY_MS) {
+      delay_ms = SCTP_RETRY_MAX_DELAY_MS;
+    }
+    if (now_ms - retry->last_sent_ms < delay_ms) {
+      continue;
+    }
+    retry->last_sent_ms = now_ms;
+    retry->retries++;
+    unsigned kind = retry->kind, attempt = retry->retries;
+    uint8_t packet[CONFIG_MTU];
+    size_t packet_size = retry->size;
+    memcpy(packet, retry->packet, packet_size);
+    if (sctp_send_packet(sctp, packet, packet_size) < 0) {
+      LOGW("SCTP control retry send failed kind=%u attempt=%u",
+           kind, attempt);
+    } else {
+      LOGI("SCTP control retransmitted kind=%u attempt=%u",
+           kind, attempt);
+    }
+  }
+#endif
+}
+
+static int sctp_outgoing_data_cb(void* userdata, void* buf, size_t len, uint8_t tos, uint8_t set_df) {
+  (void)tos;
+  (void)set_df;
+  int ret = sctp_send_packet((Sctp*)userdata, buf, len);
+  return ret < 0 ? ret : 0;
+}
+
+static uint16_t sctp_current_ssn(Sctp* sctp, uint16_t sid) {
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid) {
+      return sctp->stream_table[i].next_ssn;
+    }
+  }
+
+  if (sctp->stream_count < SCTP_MAX_STREAMS) {
+    SctpStreamEntry* stream = &sctp->stream_table[sctp->stream_count++];
+    memset(stream, 0, sizeof(*stream));
+    stream->label[0] = '\0';
+    stream->sid = sid;
+    stream->next_ssn = 0;
+    stream->rx_next_ssn = 0;
+    stream->open = 0;
+    stream->unordered = 0;
+    stream->drop_on_send_failure = 0;
+    return 0;
+  }
+
+  LOGW("SCTP stream table full, using fallback SSN for sid=%u", sid);
+  return sctp->next_ssn_fallback;
+}
+
+static void sctp_commit_ssn(Sctp* sctp, uint16_t sid) {
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid) {
+      sctp->stream_table[i].next_ssn++;
+      return;
+    }
+  }
+
+  sctp->next_ssn_fallback++;
+}
+
+void sctp_set_stream_unordered(Sctp* sctp, uint16_t sid, int unordered) {
+  if (!sctp)
+    return;
+
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid) {
+      sctp->stream_table[i].unordered = unordered != 0;
+      return;
+    }
+  }
+
+  if (sctp->stream_count < SCTP_MAX_STREAMS) {
+    SctpStreamEntry* stream = &sctp->stream_table[sctp->stream_count++];
+    memset(stream, 0, sizeof(*stream));
+    stream->label[0] = '\0';
+    stream->sid = sid;
+    stream->next_ssn = 0;
+    stream->rx_next_ssn = 0;
+    stream->open = 0;
+    stream->unordered = unordered != 0;
+    stream->drop_on_send_failure = 0;
+  }
+}
+
+void sctp_set_stream_drop_on_send_failure(Sctp* sctp, uint16_t sid,
+                                          int drop_on_send_failure) {
+  if (!sctp)
+    return;
+
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid) {
+      sctp->stream_table[i].drop_on_send_failure =
+          drop_on_send_failure != 0;
+      return;
+    }
+  }
+
+  if (sctp->stream_count < SCTP_MAX_STREAMS) {
+    SctpStreamEntry* stream = &sctp->stream_table[sctp->stream_count++];
+    memset(stream, 0, sizeof(*stream));
+    stream->label[0] = '\0';
+    stream->sid = sid;
+    stream->next_ssn = 0;
+    stream->rx_next_ssn = 0;
+    stream->open = 0;
+    stream->unordered = 0;
+    stream->drop_on_send_failure = drop_on_send_failure != 0;
+  }
+}
+
+int sctp_stream_drops_on_send_failure(Sctp* sctp, uint16_t sid) {
+  if (!sctp)
+    return 0;
+
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid)
+      return sctp->stream_table[i].drop_on_send_failure;
+  }
+  return 0;
+}
+
+static int sctp_stream_is_unordered(Sctp* sctp, uint16_t sid) {
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid)
+      return sctp->stream_table[i].unordered;
+  }
+  return 0;
+}
+
+#if !CONFIG_USE_USRSCTP
+static int sctp_tsn_after(uint32_t left, uint32_t right) {
+  return (int32_t)(left - right) > 0;
+}
+
+static int sctp_tsn_at_or_before(uint32_t left, uint32_t right) {
+  return (int32_t)(left - right) <= 0;
+}
+
+static SctpTxHistoryEntry* sctp_find_tx_history(Sctp* sctp, uint32_t tsn) {
+  SctpTxHistoryEntry* entry = &sctp->tx_history[tsn % SCTP_TX_HISTORY_SIZE];
+
+  return entry->valid && entry->tsn == tsn ? entry : NULL;
+}
+
+static void sctp_record_tx(Sctp* sctp, uint32_t tsn, int abandonable) {
+  SctpTxHistoryEntry* entry = &sctp->tx_history[tsn % SCTP_TX_HISTORY_SIZE];
+
+  if (!sctp->tx_abandonable_prefix_valid) {
+    sctp->tx_abandonable_prefix_tsn = tsn - 1U;
+    sctp->tx_abandonable_prefix_valid = 1;
+  }
+  if (entry->valid) {
+    /* DATA TSNs are recorded in order. Summarize overwritten entries so a
+     * delayed SACK can still abandon lost video after any history rotation. */
+    sctp->tx_evicted_through_tsn = entry->tsn;
+    sctp->tx_evicted_through_valid = 1;
+    if (!entry->abandonable) {
+      sctp->tx_evicted_reliable_tsn = entry->tsn;
+      sctp->tx_evicted_reliable_valid = 1;
+    } else if (entry->tsn == sctp->tx_abandonable_prefix_tsn + 1U) {
+      sctp->tx_abandonable_prefix_tsn = entry->tsn;
+    }
+  }
+  entry->tsn = tsn;
+  entry->valid = 1;
+  entry->abandonable = abandonable != 0;
+}
+
+static void sctp_retire_tx_through(Sctp* sctp, uint32_t cumulative_tsn_ack) {
+  size_t i;
+
+  while (sctp->tx_head && sctp_tsn_at_or_before(sctp->tx_head->tsn, cumulative_tsn_ack)) {
+    SctpTxPacket* packet = sctp->tx_head;
+    sctp->tx_head = packet->next;
+    free(packet);
+    sctp->tx_count--;
+  }
+  if (!sctp->tx_head) sctp->tx_tail = NULL;
+
+  if (!sctp->tx_abandonable_prefix_valid ||
+      sctp_tsn_after(cumulative_tsn_ack, sctp->tx_abandonable_prefix_tsn)) {
+    sctp->tx_abandonable_prefix_tsn = cumulative_tsn_ack;
+    sctp->tx_abandonable_prefix_valid = 1;
+  }
+  /* The newest evicted reliable TSN is a conservative barrier for all
+   * evicted control packets. Once it is acknowledged, the whole evicted
+   * suffix is safe, including video overwritten while that ACK was delayed. */
+  if (sctp->tx_evicted_through_valid &&
+      (!sctp->tx_evicted_reliable_valid ||
+       sctp_tsn_at_or_before(sctp->tx_evicted_reliable_tsn,
+                             cumulative_tsn_ack)) &&
+      sctp_tsn_after(sctp->tx_evicted_through_tsn,
+                     sctp->tx_abandonable_prefix_tsn)) {
+    sctp->tx_abandonable_prefix_tsn = sctp->tx_evicted_through_tsn;
+  }
+  for (i = 0; i < SCTP_TX_HISTORY_SIZE; ++i) {
+    SctpTxHistoryEntry* entry = &sctp->tx_history[i];
+
+    if (entry->valid &&
+        sctp_tsn_at_or_before(entry->tsn, cumulative_tsn_ack)) {
+      entry->valid = 0;
+    }
+  }
+}
+
+static int sctp_send_forward_tsn(Sctp* sctp, uint32_t new_cumulative_tsn) {
+  SctpPacket* packet = (SctpPacket*)sctp->buf;
+  SctpForwardTsnChunk* chunk = (SctpForwardTsnChunk*)packet->chunks;
+  const size_t chunk_size = sizeof(SctpChunkCommon) + sizeof(uint32_t);
+  const size_t packet_size = sizeof(SctpHeader) + chunk_size;
+
+  memset(sctp->buf, 0, sizeof(sctp->buf));
+  packet->header.source_port = htons(sctp->local_port);
+  packet->header.destination_port = htons(sctp->remote_port);
+  packet->header.verification_tag = sctp->verification_tag;
+  chunk->common.type = SCTP_FORWARD_TSN;
+  chunk->common.flags = 0;
+  chunk->common.length = htons(chunk_size);
+  chunk->new_cumulative_tsn = htonl(new_cumulative_tsn);
+  packet->header.checksum = sctp_get_checksum(
+      sctp, (const uint8_t*)sctp->buf, packet_size);
+  if (sctp_outgoing_data_cb(sctp, sctp->buf, packet_size, 0, 0) < 0) {
+    return -1;
+  }
+  sctp->forward_tsn_sent++;
+  if (sctp->forward_tsn_sent == 1U || (sctp->forward_tsn_sent % 128U) == 0U) {
+    LOGW("SCTP gap recovery: FORWARD_TSN=%lu (sent=%lu)",
+         (unsigned long)new_cumulative_tsn, (unsigned long)sctp->forward_tsn_sent);
+  }
+  return 0;
+}
+
+static void sctp_handle_sack(Sctp* sctp, const SctpSackChunk* sack,
+                             size_t chunk_len) {
+  const SctpGapAckBlock* first_gap;
+  uint32_t cumulative_tsn_ack;
+  uint32_t forward_tsn;
+  uint32_t tsn;
+  uint16_t gap_count;
+  uint16_t first_gap_start;
+  size_t gap_bytes;
+
+  if (chunk_len < sizeof(*sack)) {
+    return;
+  }
+  gap_count = ntohs(sack->number_of_gap_ack_blocks);
+  gap_bytes = (size_t)gap_count * sizeof(SctpGapAckBlock);
+  if (gap_bytes > chunk_len - sizeof(*sack)) {
+    LOGW("Ignoring malformed SCTP SACK gap list");
+    return;
+  }
+
+  cumulative_tsn_ack = ntohl(sack->cumulative_tsn_ack);
+  if (!sctp->tx_cumulative_tsn_ack_valid ||
+      sctp_tsn_after(cumulative_tsn_ack, sctp->tx_cumulative_tsn_ack)) {
+    sctp->tx_cumulative_tsn_ack = cumulative_tsn_ack;
+    sctp->tx_cumulative_tsn_ack_valid = 1;
+    sctp_retire_tx_through(sctp, cumulative_tsn_ack);
+    if (sctp->last_forward_tsn_valid &&
+        sctp_tsn_at_or_before(sctp->last_forward_tsn,
+                              cumulative_tsn_ack)) {
+      sctp->last_forward_tsn_valid = 0;
+      sctp->forward_tsn_repeat_sacks = 0;
+    }
+  }
+  if (gap_count == 0) {
+    return;
+  }
+
+  sctp->sack_gap_reports++;
+  first_gap = (const SctpGapAckBlock*)sack->blocks;
+  first_gap_start = ntohs(first_gap->start);
+  if (first_gap_start <= 1 || !sctp->peer_supports_forward_tsn) {
+    return;
+  }
+
+  forward_tsn = cumulative_tsn_ack + first_gap_start - 1U;
+  tsn = cumulative_tsn_ack + 1U;
+  if (sctp->tx_abandonable_prefix_valid &&
+      sctp_tsn_at_or_before(tsn, sctp->tx_abandonable_prefix_tsn)) {
+    /* Skip the summarized prefix in constant time; a gap can cover up to
+     * 65534 TSNs, while the remaining lookups are bounded by the history. */
+    tsn = sctp_tsn_at_or_before(forward_tsn,
+                                sctp->tx_abandonable_prefix_tsn)
+              ? forward_tsn + 1U : sctp->tx_abandonable_prefix_tsn + 1U;
+  }
+  for (; sctp_tsn_at_or_before(tsn, forward_tsn); ++tsn) {
+    SctpTxHistoryEntry* entry = sctp_find_tx_history(sctp, tsn);
+
+    if (!entry || !entry->abandonable) {
+      return;
+    }
+  }
+
+  if (sctp->last_forward_tsn_valid &&
+      sctp->last_forward_tsn == forward_tsn) {
+    sctp->forward_tsn_repeat_sacks++;
+    if (sctp->forward_tsn_repeat_sacks < 8U) {
+      return;
+    }
+    sctp->forward_tsn_repeat_sacks = 0;
+  }
+  if (sctp_send_forward_tsn(sctp, forward_tsn) == 0) {
+    sctp->last_forward_tsn = forward_tsn;
+    sctp->last_forward_tsn_valid = 1;
+    sctp->forward_tsn_repeat_sacks = 0;
+  } else {
+    sctp->last_forward_tsn_valid = 0;
+    sctp->forward_tsn_repeat_sacks = 0;
+  }
+}
+
+static int sctp_init_has_parameter(const SctpInitChunk* init,
+                                   size_t chunk_len, uint16_t wanted_type) {
+  const uint8_t* cursor;
+  const uint8_t* end;
+
+  if (chunk_len < sizeof(*init)) {
+    return 0;
+  }
+  cursor = (const uint8_t*)init + sizeof(*init);
+  end = (const uint8_t*)init + chunk_len;
+  while (cursor + sizeof(SctpChunkParam) <= end) {
+    const SctpChunkParam* param = (const SctpChunkParam*)cursor;
+    size_t param_len = ntohs(param->length);
+
+    if (param_len < sizeof(*param) ||
+        param_len > (size_t)(end - cursor)) {
+      return 0;
+    }
+    if (ntohs(param->type) == wanted_type) {
+      return 1;
+    }
+    param_len = 4U * ((param_len + 3U) / 4U);
+    if (param_len > (size_t)(end - cursor)) {
+      return 0;
+    }
+    cursor += param_len;
+  }
+  return 0;
+}
+
+static size_t sctp_append_forward_tsn_parameter(uint8_t* destination,
+                                                size_t capacity) {
+  SctpChunkParam* param;
+
+  if (capacity < sizeof(SctpChunkParam)) {
+    return 0;
+  }
+  param = (SctpChunkParam*)destination;
+  param->type = htons(SCTP_PARAM_FORWARD_TSN_SUPPORTED);
+  param->length = htons(sizeof(*param));
+  return sizeof(*param);
+}
+#endif
+
 int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uint16_t sid) {
+  size_t original_len = len;
+  int abandonable;
+  int unordered;
+
+  if (!sctp || !buf || len == 0 ||
+      (!sctp->dtls_srtp && !sctp->send_packet)) {
+    return -1;
+  }
+  unordered = ppid != PPID_CONTROL && sctp_stream_is_unordered(sctp, sid);
+  abandonable = unordered && sctp_stream_drops_on_send_failure(sctp, sid);
 #if CONFIG_USE_USRSCTP
   int res;
   struct sctp_sendv_spa spa = {0};
@@ -101,7 +643,8 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
   spa.sendv_flags = SCTP_SEND_SNDINFO_VALID;
 
   spa.sendv_sndinfo.snd_sid = sid;
-  spa.sendv_sndinfo.snd_flags = SCTP_EOR;
+  spa.sendv_sndinfo.snd_flags = SCTP_EOR |
+      (unordered ? SCTP_UNORDERED : 0);
   spa.sendv_sndinfo.snd_ppid = htonl(ppid);
 
   res = usrsctp_sendv(sctp->sock, buf, len, NULL, 0, &spa, sizeof(spa), SCTP_SENDV_SPA, 0);
@@ -110,110 +653,578 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
   }
   return res;
 #else
-  size_t padding_len = 0;
-  size_t payload_max = SCTP_MTU - sizeof(SctpPacket) - sizeof(SctpDataChunk);
-  size_t pos = 0;
-  static uint16_t sqn = 0;
+  const size_t payload_max = SCTP_MTU - sizeof(SctpPacket) - sizeof(SctpDataChunk);
+  int retry_open = ppid == PPID_CONTROL && (uint8_t)buf[0] == DATA_CHANNEL_OPEN;
+  size_t fragments = (len - 1U) / payload_max + 1U;
+  if (retry_open && fragments != 1) return -1;
+  if (!retry_open &&
+      (len > CONFIG_SCTP_MESSAGE_SIZE || fragments > SCTP_TX_WINDOW)) return -1;
+  if (!abandonable && !retry_open &&
+      (sctp->tx_count > SCTP_TX_WINDOW ||
+       fragments > SCTP_TX_WINDOW - sctp->tx_count)) return -1;
 
-  SctpPacket* packet = (SctpPacket*)(sctp->buf);
-  SctpDataChunk* chunk = (SctpDataChunk*)(packet->chunks);
+  /* Reserve every fragment before sending any part of a reliable message.
+   * Memory/window pressure therefore rejects the entire message atomically. */
+  SctpTxPacket* pending = NULL;
+  SctpTxPacket** tail = &pending;
+  if (!abandonable && !retry_open) {
+    for (size_t i = 0; i < fragments; ++i) {
+      size_t bytes = len - i * payload_max;
+      if (bytes > payload_max) bytes = payload_max;
+      size_t packet_size = (sizeof(SctpHeader) + sizeof(SctpDataChunk) + bytes + 3U) & ~(size_t)3U;
+      SctpTxPacket* packet = calloc(1, sizeof(*packet) + packet_size);
+      if (!packet) {
+        while (pending) {
+          SctpTxPacket* next = pending->next;
+          free(pending);
+          pending = next;
+        }
+        return -1;
+      }
+      packet->length = packet_size;
+      *tail = packet;
+      tail = &packet->next;
+    }
+  }
+  uint16_t ssn = sctp_current_ssn(sctp, sid);
+  uint32_t first_tsn = sctp->tsn;
+  SctpTxPacket* saved = pending;
+  size_t offset = 0;
+  for (size_t i = 0; i < fragments; ++i) {
+    size_t bytes = len - offset;
+    if (bytes > payload_max) bytes = payload_max;
+    size_t packet_size = (sizeof(SctpHeader) + sizeof(SctpDataChunk) + bytes + 3U) & ~(size_t)3U;
+    SctpPacket* packet = (SctpPacket*)(saved ? saved->data : sctp->buf);
+    memset(packet, 0, packet_size);
+    packet->header.source_port = htons(sctp->local_port);
+    packet->header.destination_port = htons(sctp->remote_port);
+    packet->header.verification_tag = sctp->verification_tag;
+    SctpDataChunk* chunk = (SctpDataChunk*)packet->chunks;
+    chunk->type = SCTP_DATA;
+    chunk->iube = (i == 0 ? 2 : 0) | (i + 1U == fragments ? 1 : 0) | (unordered ? 4 : 0);
+    chunk->length = htons(sizeof(*chunk) + bytes);
+    chunk->tsn = htonl(first_tsn + i);
+    chunk->sid = htons(sid);
+    chunk->sqn = htons(ssn);
+    chunk->ppid = htonl(ppid);
+    memcpy(chunk->data, buf + offset, bytes);
+    packet->header.checksum = sctp_get_checksum(sctp, (uint8_t*)packet, packet_size);
+    if (saved) {
+      saved->tsn = first_tsn + i;
+      saved->sent_at = ports_get_epoch_time();
+      sctp_record_tx(sctp, saved->tsn, 0);
+      saved = saved->next;
+    } else {
+      if (retry_open && sctp_retry_store(sctp, SCTP_RETRY_DCEP_OPEN,
+                                          (uint8_t*)packet, packet_size, sid) < 0) return -1;
+      if (retry_open) {
+        uint8_t open_packet[CONFIG_MTU];
+        memcpy(open_packet, packet, packet_size);
+        sctp_record_tx(sctp, sctp->tsn++, 0);
+        sctp_commit_ssn(sctp, sid);
+        sctp_send_packet(sctp, open_packet, packet_size);
+        return (int)original_len;
+      }
+      if (sctp_send_packet(sctp, (uint8_t*)packet, packet_size) < 0 && !retry_open) {
+        if (i > 0) sctp_commit_ssn(sctp, sid);
+        return i > 0 ? -2 : -1;
+      }
+      sctp_record_tx(sctp, sctp->tsn++, abandonable);
+    }
+    offset += bytes;
+  }
+  sctp_commit_ssn(sctp, sid);
+  if (pending) {
+    if (sctp->tx_tail) sctp->tx_tail->next = pending;
+    else sctp->tx_head = pending;
+    sctp->tx_tail = pending;
+    while (sctp->tx_tail->next) sctp->tx_tail = sctp->tx_tail->next;
+    sctp->tx_count += fragments;
+    sctp->tsn += fragments;
+    /* Accepted copies remain owned by SCTP until cumulatively acknowledged.
+     * A failed first UDP send is retried with the same TSN/SSN and payload. */
+    for (size_t i = 0; i < fragments; ++i) {
+      saved = sctp->tx_head;
+      while (saved && saved->tsn != first_tsn + i) saved = saved->next;
+      if (saved) sctp_send_packet(sctp, saved->data, saved->length);
+    }
 
-  packet->header.source_port = htons(sctp->local_port);
-  packet->header.destination_port = htons(sctp->remote_port);
-  packet->header.verification_tag = sctp->verification_tag;
-
-  chunk->type = SCTP_DATA;
-  chunk->iube = 0x06;
-  chunk->sid = htons(0);
-  chunk->sqn = htons(sqn++);
-  chunk->ppid = htonl(ppid);
-
-  while (len > payload_max) {
-    chunk->length = htons(payload_max + sizeof(SctpDataChunk));
-    chunk->tsn = htonl(sctp->tsn++);
-    memcpy(chunk->data, buf + pos, payload_max);
-    packet->header.checksum = 0;
-
-    packet->header.checksum = sctp_get_checksum(sctp, (const uint8_t*)sctp->buf, SCTP_MTU);
-
-    sctp_outgoing_data_cb(sctp, sctp->buf, SCTP_MTU, 0, 0);
-    chunk->iube = 0x04;
-    len -= payload_max;
-    pos += payload_max;
   }
 
-  if (len > 0) {
-    chunk->length = htons(len + sizeof(SctpDataChunk));
-    chunk->iube++;
-    chunk->tsn = htonl(sctp->tsn++);
-    memset(chunk->data, 0, payload_max);
-    memcpy(chunk->data, buf + pos, len);
-    packet->header.checksum = 0;
-
-    padding_len = 4 * ((len + sizeof(SctpDataChunk) + sizeof(SctpPacket) + 3) / 4);
-
-    packet->header.checksum = sctp_get_checksum(sctp, (const uint8_t*)sctp->buf, padding_len);
-
-    sctp_outgoing_data_cb(sctp, sctp->buf, padding_len, 0, 0);
-  }
 #endif
-  return len;
+  return (int)original_len;
 }
 
 void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid) {
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid) {
+      strncpy(sctp->stream_table[i].label, label, sizeof(sctp->stream_table[i].label) - 1);
+      sctp->stream_table[i].label[sizeof(sctp->stream_table[i].label) - 1] = '\0';
+      return;
+    }
+  }
+
   if (sctp->stream_count < SCTP_MAX_STREAMS) {
-    strncpy(sctp->stream_table[sctp->stream_count].label, label, sizeof(sctp->stream_table[sctp->stream_count].label));
+    memset(&sctp->stream_table[sctp->stream_count], 0, sizeof(SctpStreamEntry));
+    strncpy(sctp->stream_table[sctp->stream_count].label, label,
+            sizeof(sctp->stream_table[sctp->stream_count].label) - 1);
+    sctp->stream_table[sctp->stream_count].label[sizeof(sctp->stream_table[sctp->stream_count].label) - 1] = '\0';
     sctp->stream_table[sctp->stream_count].sid = sid;
+    sctp->stream_table[sctp->stream_count].next_ssn = 0;
+    sctp->stream_table[sctp->stream_count].rx_next_ssn = 0;
+    sctp->stream_table[sctp->stream_count].open = 0;
+    sctp->stream_table[sctp->stream_count].unordered = 0;
+    sctp->stream_table[sctp->stream_count].drop_on_send_failure = 0;
     sctp->stream_count++;
   } else
     LOGE("Stream table full. Cannot add more streams.");
 }
 
-void sctp_parse_data_channel_open(Sctp* sctp, uint16_t sid, char* data, size_t length) {
-  if (length < 12)
-    return;  // Not enough data for a DATA_CHANNEL_OPEN message
-
-  if (data[0] == DATA_CHANNEL_OPEN) {
-    uint16_t label_length = ntohs(*(uint16_t*)(data + 8));
-    uint16_t protocol_length = ntohs(*(uint16_t*)(data + 10));
-
-    // Ensure we have enough data for the label and protocol
-    if (length < 12 + label_length + protocol_length)
+static void sctp_mark_stream_open(Sctp* sctp, uint16_t sid) {
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid) {
+      if (sctp->stream_table[i].open) return;
+      sctp->stream_table[i].open = 1;
+      if (sctp->onchannelopen)
+        sctp->onchannelopen(sid, sctp->stream_table[i].label, sctp->userdata);
       return;
+    }
+  }
 
-    char* label = (char*)(data + 12);
+}
 
-    // copy and null-terminate
-    char label_str[label_length + 1];
-    memcpy(label_str, label, label_length);
-    label_str[label_length] = '\0';
-
-    // Log or process the DATA_CHANNEL_OPEN message
-    printf("DATA_CHANNEL_OPEN: Label=%s, sid=%d\n", label_str, sid);
-
-    // Add stream mapping
-    sctp_add_stream_mapping(sctp, label_str, sid);
+static void sctp_send_pending_acks(Sctp* sctp) {
+  for (int i = 0; i < sctp->stream_count; ++i) {
+    SctpStreamEntry* stream = &sctp->stream_table[i];
+    if (!stream->ack_pending) continue;
     char ack = DATA_CHANNEL_ACK;
-    sctp_outgoing_data(sctp, &ack, 1, DATA_CHANNEL_PPID_CONTROL, sid);
+    stream->ack_pending = 0; /* Prevent re-entry from queuing a second ACK. */
+    if (sctp_outgoing_data(sctp, &ack, 1, PPID_CONTROL, stream->sid) == 1) {
+      sctp_mark_stream_open(sctp, stream->sid);
+    } else stream->ack_pending = 1;
+  }
+}
+
+static int sctp_map_data_channel_open(Sctp* sctp, uint16_t sid,
+                                      const uint8_t* data, size_t length) {
+  uint16_t label_length;
+  uint16_t protocol_length;
+  uint32_t reliability_parameter;
+  char label[sizeof(sctp->stream_table[0].label)];
+  size_t copied_label_length;
+
+  if (!sctp || !data || sid == UINT16_MAX || length < 12 || data[0] != DATA_CHANNEL_OPEN)
+    return -1;
+
+  memcpy(&label_length, data + 8, sizeof(label_length));
+  memcpy(&protocol_length, data + 10, sizeof(protocol_length));
+  memcpy(&reliability_parameter, data + 4, sizeof(reliability_parameter));
+  label_length = ntohs(label_length);
+  protocol_length = ntohs(protocol_length);
+  reliability_parameter = ntohl(reliability_parameter);
+  if (length != 12 + (size_t)label_length + (size_t)protocol_length ||
+      label_length >= sizeof(label) || memchr(data + 12, 0, label_length) ||
+      ((data[1] & 0x7f) > 2) ||
+      ((data[1] & 0x7f) == 0 && reliability_parameter != 0))
+    return -1;
+  for (int i = 0; i < sctp->stream_count; ++i)
+    if (sctp->stream_table[i].sid == sid && sctp->stream_table[i].open) return -1;
+#if !CONFIG_USE_USRSCTP
+  for (int i = 0; i < SCTP_MAX_STREAMS; ++i)
+    if (sctp->dcep_retries[i] && sctp->dcep_retries[i]->sid == sid) return -1;
+#endif
+
+  copied_label_length = label_length;
+  if (copied_label_length >= sizeof(label))
+    copied_label_length = sizeof(label) - 1;
+  memcpy(label, data + 12, copied_label_length);
+  label[copied_label_length] = '\0';
+  sctp_add_stream_mapping(sctp, label, sid);
+  sctp_set_stream_unordered(sctp, sid, (data[1] & 0x80) != 0);
+  sctp_set_stream_drop_on_send_failure(
+      sctp, sid, (data[1] & 0x7f) == 0x01 && reliability_parameter == 0);
+  for (int i = 0; i < sctp->stream_count; ++i) {
+    if (sctp->stream_table[i].sid == sid) {
+      sctp->stream_table[i].ack_pending = 1;
+      return 0;
+    }
+  }
+  return -1;
+}
+
+void sctp_parse_data_channel_open(Sctp* sctp, uint16_t sid, char* data, size_t length) {
+  if (sctp_map_data_channel_open(sctp, sid, (const uint8_t*)data, length) == 0) {
+    sctp_send_pending_acks(sctp);
   }
 }
 
 void sctp_handle_sctp_packet(Sctp* sctp, char* buf, size_t len) {
-  if (len <= 29)
+  uint16_t sid;
+  uint32_t ppid;
+
+  if (!sctp || !buf || len < sizeof(SctpHeader) + sizeof(SctpDataChunk) + 1)
     return;
 
   if (buf[12] != 0)  // if chunk_type is no zero, it's not data
     return;
 
-  uint16_t sid = ntohs(*(uint16_t*)(buf + 20));
-  uint32_t ppid = ntohl(*(uint32_t*)(buf + 24));
+  memcpy(&sid, buf + 20, sizeof(sid));
+  memcpy(&ppid, buf + 24, sizeof(ppid));
+  sid = ntohs(sid);
+  ppid = ntohl(ppid);
 
   if (ppid == DATA_CHANNEL_PPID_CONTROL)
     sctp_parse_data_channel_open(sctp, sid, buf + 28, len - 28);
 }
 
+#if !CONFIG_USE_USRSCTP
+/* TSNs acknowledge reception across the association. SSNs order messages
+ * within one stream; an unrelated TSN gap must not block unordered delivery. */
+static SctpStreamEntry* sctp_rx_stream(Sctp* sctp, uint16_t sid) {
+  for (int i = 0; i < sctp->stream_count; ++i) {
+    if (sctp->stream_table[i].sid == sid) return &sctp->stream_table[i];
+  }
+  if (sctp->stream_count == SCTP_MAX_STREAMS) return NULL;
+  SctpStreamEntry* stream = &sctp->stream_table[sctp->stream_count++];
+  memset(stream, 0, sizeof(*stream));
+  stream->sid = sid;
+  return stream;
+}
+
+static void sctp_rx_advance(Sctp* sctp) {
+  while (sctp->rx_tsn_mask & 1U) {
+    ++sctp->rx_tsn;
+    sctp->rx_tsn_mask >>= 1;
+  }
+}
+
+/* Classic DATA fragments belonging to one complete message are consecutive. */
+static SctpRxChunk* sctp_rx_message_end(SctpRxChunk* first, size_t* size,
+                                       SctpRxChunk** tail) {
+  const SctpDataChunk* begin = (const SctpDataChunk*)first->data;
+  const SctpDataChunk* end = begin;
+  SctpRxChunk* last = first;
+  *size = first->discarded ? CONFIG_SCTP_MESSAGE_SIZE + 1U :
+                            first->length - sizeof(*begin);
+  if (tail) *tail = first;
+  if (!(begin->iube & 2)) return NULL;
+  while (!(end->iube & 1)) {
+    SctpRxChunk* next = last->next;
+    if (!next || next->tsn != last->tsn + 1U) break;
+    const SctpDataChunk* part = (const SctpDataChunk*)next->data;
+    if (part->sid != begin->sid || part->sqn != begin->sqn ||
+        part->ppid != begin->ppid || (part->iube & 2) ||
+        (part->iube & 4) != (begin->iube & 4)) break;
+    *size += next->length - sizeof(*part);
+    last = next;
+    end = part;
+  }
+  if (tail) *tail = last;
+  return (end->iube & 1) ? last : NULL;
+}
+
+/* A peer may split a supported message into more DATA chunks than our slot
+ * count (for example after a path-MTU change). Keep its cumulatively ACKed,
+ * contiguous prefix in one bounded allocation so the receive window can
+ * reopen before E arrives. Never discard acknowledged bytes on allocation
+ * failure, merge gaps, or compact a message awaiting an earlier stream SSN. */
+static void sctp_compact_rx_prefix(Sctp* sctp) {
+  if (sctp->rx_count < SCTP_RX_WINDOW || !sctp->rx_head) return;
+  SctpRxChunk* first = sctp->rx_head;
+  const SctpDataChunk* begin = (const SctpDataChunk*)first->data;
+  SctpStreamEntry* stream = sctp_rx_stream(sctp, ntohs(begin->sid));
+  if (!stream || first->discarded || !(begin->iube & 2) ||
+      (!(begin->iube & 4) && ntohs(begin->sqn) != stream->rx_next_ssn)) return;
+  size_t size;
+  SctpRxChunk* tail;
+  if (sctp_rx_message_end(first, &size, &tail) || tail == first ||
+      size > CONFIG_SCTP_MESSAGE_SIZE || sctp_tsn_after(tail->tsn, sctp->rx_tsn)) return;
+  uint32_t last_tsn = tail->tsn;
+  size_t required = sizeof(*begin) + size;
+  SctpRxChunk* merged = first;
+  if (first->capacity < required) {
+    /* Only this acknowledged head prefix grows. Geometric capacity bounds
+     * aggregate copying to O(message size), even with a two-slot window.
+     * Slack is < one message; never reserve a full message for ordinary DATA. */
+    size_t capacity = first->capacity;
+    size_t maximum = sizeof(*begin) + CONFIG_SCTP_MESSAGE_SIZE;
+    while (capacity < required) {
+      capacity = capacity > maximum / 2 ? maximum : capacity * 2;
+    }
+    merged = malloc(sizeof(*merged) + capacity);
+    if (!merged) return;
+    memcpy(merged, first, sizeof(*merged) + first->length);
+    merged->capacity = capacity;
+  }
+  size_t copied = first->length;
+  SctpRxChunk* part = first->next;
+  SctpRxChunk* after = tail->next;
+  while (part != after) {
+    SctpRxChunk* next = part->next;
+    size_t bytes = part->length - sizeof(*begin);
+    memcpy(merged->data + copied, part->data + sizeof(*begin), bytes);
+    copied += bytes;
+    free(part);
+    --sctp->rx_count;
+    part = next;
+  }
+  if (merged != first) free(first);
+  merged->next = after;
+  merged->tsn = last_tsn;
+  ((SctpDataChunk*)merged->data)->tsn = htonl(last_tsn);
+  /* The prefix size lives in size_t metadata, not a 16-bit wire length.
+   * Retain the original DATA header length; this storage is never sent. */
+  merged->length = required;
+  sctp->rx_head = merged;
+}
+
+static size_t sctp_rx_byte_limit(void) {
+  size_t slots = SCTP_RX_WINDOW * (size_t)CONFIG_MTU;
+  size_t message = CONFIG_SCTP_MESSAGE_SIZE + SCTP_RX_WINDOW * sizeof(SctpDataChunk);
+  return slots > message ? slots : message;
+}
+
+static size_t sctp_rx_bytes(const Sctp* sctp) {
+  size_t bytes = 0;
+  for (const SctpRxChunk* chunk = sctp->rx_head; chunk; chunk = chunk->next)
+    bytes += chunk->length;
+  return bytes;
+}
+
+static int sctp_drain_rx(Sctp* sctp) {
+  SctpRxChunk** position = &sctp->rx_head;
+  while (*position) {
+    SctpRxChunk* first = *position;
+    const SctpDataChunk* begin = (const SctpDataChunk*)first->data;
+    SctpStreamEntry* stream = sctp_rx_stream(sctp, ntohs(begin->sid));
+    int unordered = (begin->iube & 4) != 0;
+    uint16_t ssn = ntohs(begin->sqn);
+    if (!stream) {
+      /* Exceeding the bounded stream table must not close healthy channels. */
+      if (begin->iube & 2) LOGW("Dropping DATA for unsupported SID %u", ntohs(begin->sid));
+      *position = first->next;
+      free(first);
+      --sctp->rx_count;
+      continue;
+    }
+    if (!(begin->iube & 2) ||
+        (!unordered && ssn != stream->rx_next_ssn && !first->forward_ready)) {
+      position = &first->next;
+      continue;
+    }
+    size_t size;
+    SctpRxChunk* tail;
+    SctpRxChunk* last = sctp_rx_message_end(first, &size, &tail);
+    int discard = size > CONFIG_SCTP_MESSAGE_SIZE;
+    if (discard && !first->discarded)
+      LOGW("Dropping oversized DATA message on SID %u", ntohs(begin->sid));
+    if (discard && !last) {
+      /* Retain one header as a discard marker until E arrives. Collapsing
+       * each contiguous prefix reopens the RX window even for messages much
+       * larger than that window, without ever delivering a truncated body. */
+      SctpDataChunk marker;
+      memcpy(&marker, begin, sizeof(marker));
+      int forward_ready = first->forward_ready;
+      while (first != tail) {
+        SctpRxChunk* next = first->next;
+        free(first);
+        --sctp->rx_count;
+        first = next;
+      }
+      marker.tsn = htonl(tail->tsn);
+      memcpy(tail->data, &marker, sizeof(marker));
+      tail->length = sizeof(marker);
+      tail->discarded = 1;
+      tail->forward_ready = forward_ready;
+      *position = tail;
+      position = &tail->next;
+      continue;
+    }
+    if (!last) {
+      position = &first->next;
+      continue;
+    }
+    char* message = discard ? NULL : malloc(size + 1);
+    if (!discard && !message) return 0; /* Keep acknowledged payload until memory recovers. */
+    size_t copied = 0;
+    uint32_t ppid = ntohl(begin->ppid);
+    uint16_t sid = ntohs(begin->sid);
+    SctpRxChunk* after = last->next;
+    while (first != after) {
+      SctpRxChunk* next = first->next;
+      const SctpDataChunk* part = (const SctpDataChunk*)first->data;
+      size_t bytes = first->length - sizeof(*part);
+      if (message) memcpy(message + copied, part->data, bytes);
+      copied += bytes;
+      free(first);
+      --sctp->rx_count;
+      first = next;
+    }
+    *position = after;
+    uint16_t next_ssn = ssn + 1U;
+    if (!unordered && (int16_t)(next_ssn - stream->rx_next_ssn) > 0)
+      stream->rx_next_ssn = next_ssn;
+    if (discard) {
+      position = &sctp->rx_head;
+      continue;
+    }
+    message[size] = '\0';
+    if (ppid == DATA_CHANNEL_PPID_CONTROL && size &&
+        (uint8_t)message[0] == DATA_CHANNEL_OPEN) {
+      sctp_parse_data_channel_open(sctp, sid, message, size);
+    } else if (ppid == DATA_CHANNEL_PPID_CONTROL && size == 1 &&
+               (uint8_t)message[0] == DATA_CHANNEL_ACK) {
+      if (sctp_ack_channel(sctp, sid)) sctp_mark_stream_open(sctp, sid);
+    } else if ((ppid == DATA_CHANNEL_PPID_DOMSTRING ||
+                ppid == DATA_CHANNEL_PPID_BINARY) && sctp->onmessage) {
+      sctp->onmessage(message, size, sctp->userdata, sid);
+    }
+    free(message);
+    position = &sctp->rx_head;
+  }
+  return 0;
+}
+
+static int sctp_receive_data(Sctp* sctp, const SctpDataChunk* chunk, size_t length) {
+  uint32_t tsn = ntohl(chunk->tsn);
+  if (!sctp->rx_tsn_valid) {
+    sctp->rx_tsn = tsn - 1U;
+    sctp->rx_tsn_valid = 1;
+  }
+  int32_t distance = (int32_t)(tsn - sctp->rx_tsn);
+  if (distance <= 0 || (uint32_t)distance > SCTP_RX_WINDOW) return 0;
+  uint32_t bit = 1U << (distance - 1);
+  if (sctp->rx_tsn_mask & bit) return 0;
+  if (length > CONFIG_MTU) return 0;
+  sctp_compact_rx_prefix(sctp);
+  size_t buffered = sctp_rx_bytes(sctp);
+  size_t byte_limit = sctp_rx_byte_limit();
+  while (sctp->rx_count >= SCTP_RX_WINDOW || buffered > byte_limit ||
+         length > byte_limit - buffered) {
+    if (distance != 1) return 0;
+    /* Reneging a gap ACK is allowed; cumulative ACKs must never be retracted.
+     * Replace the farthest gap fragment to admit a cumulative-gap repair,
+     * including consecutive repairs that cannot complete the message yet. */
+    SctpRxChunk** farthest = &sctp->rx_head;
+    while (*farthest && (*farthest)->next) farthest = &(*farthest)->next;
+    SctpRxChunk* victim = *farthest;
+    if (!victim || !sctp_tsn_after(victim->tsn, tsn)) return 0;
+    uint32_t gap = victim->tsn - sctp->rx_tsn;
+    if (gap <= 1 || gap > SCTP_RX_WINDOW) return 0;
+    sctp->rx_tsn_mask &= ~(1U << (gap - 1U));
+    *farthest = NULL;
+    buffered -= victim->length;
+    free(victim);
+    --sctp->rx_count;
+  }
+  SctpRxChunk* saved = malloc(sizeof(*saved) + length);
+  if (!saved) return 0;
+  saved->tsn = tsn;
+  saved->length = length;
+  saved->capacity = length;
+  saved->forward_ready = 0;
+  saved->discarded = 0;
+  memcpy(saved->data, chunk, length);
+  SctpRxChunk** position = &sctp->rx_head;
+  while (*position && (int32_t)(tsn - (*position)->tsn) > 0) position = &(*position)->next;
+  saved->next = *position;
+  *position = saved;
+  ++sctp->rx_count;
+  sctp->rx_tsn_mask |= bit;
+  sctp_rx_advance(sctp);
+  return sctp_drain_rx(sctp);
+}
+
+static size_t sctp_build_sack(Sctp* sctp) {
+  SctpSackChunk* sack = (SctpSackChunk*)((SctpPacket*)sctp->buf)->chunks;
+  memset(sctp->buf, 0, sizeof(sctp->buf));
+  sack->common.type = SCTP_SACK;
+  sack->cumulative_tsn_ack = htonl(sctp->rx_tsn);
+  size_t available = (SCTP_RX_WINDOW - sctp->rx_count) * CONFIG_MTU;
+  size_t buffered = sctp_rx_bytes(sctp);
+  size_t limit = sctp_rx_byte_limit();
+  size_t byte_space = buffered < limit ? limit - buffered : 0;
+  if (available > byte_space) available = byte_space;
+  sack->a_rwnd = htonl((uint32_t)available);
+  SctpGapAckBlock* blocks = (SctpGapAckBlock*)sack->blocks;
+  unsigned count = 0;
+  for (unsigned i = 0; i < SCTP_RX_WINDOW; ++i) {
+    if (!(sctp->rx_tsn_mask & (1U << i))) continue;
+    blocks[count].start = htons(i + 1U);
+    while (i + 1U < SCTP_RX_WINDOW && (sctp->rx_tsn_mask & (1U << (i + 1U)))) ++i;
+    blocks[count++].end = htons(i + 1U);
+  }
+  size_t size = sizeof(*sack) + count * sizeof(*blocks);
+  sack->number_of_gap_ack_blocks = htons(count);
+  sack->common.length = htons(size);
+  return sizeof(SctpHeader) + size;
+}
+
+static int sctp_receive_forward_tsn(Sctp* sctp, const SctpForwardTsnChunk* chunk,
+                                    size_t length) {
+  if (length < sizeof(*chunk) || (length - sizeof(*chunk)) % 4U) return -1;
+  uint32_t tsn = ntohl(chunk->new_cumulative_tsn);
+  if (!sctp->rx_tsn_valid || !sctp_tsn_after(tsn, sctp->rx_tsn)) return 0;
+  uint32_t advance = tsn - sctp->rx_tsn;
+  sctp->rx_tsn_mask = advance >= SCTP_RX_WINDOW ? 0 : sctp->rx_tsn_mask >> advance;
+  sctp->rx_tsn = tsn;
+  /* Drop incomplete skipped messages. If a future orphan is discarded,
+   * retract its gap ACK so a reliable peer can retransmit that fragment. */
+  SctpRxChunk** position = &sctp->rx_head;
+  int keep_parts = 0;
+  uint16_t keep_sid = 0, keep_ssn = 0;
+  uint32_t keep_ppid = 0;
+  while (*position) {
+    SctpRxChunk* saved = *position;
+    const SctpDataChunk* data = (const SctpDataChunk*)saved->data;
+    size_t message_size;
+    SctpRxChunk* complete = sctp_rx_message_end(saved, &message_size, NULL);
+    if (complete) {
+      /* Complete stranded messages survive TSN advancement. The stream list
+       * also releases completed SSNs at/below its skip point (RFC 3758 3.6). */
+      for (size_t i = sizeof(*chunk); i < length; i += 4) {
+        uint16_t pair[2];
+        memcpy(pair, (const uint8_t*)chunk + i, sizeof(pair));
+        if (data->sid == pair[0] &&
+            (int16_t)(ntohs(data->sqn) - ntohs(pair[1])) <= 0)
+          saved->forward_ready = 1;
+      }
+      position = &complete->next;
+      keep_parts = 0;
+      continue;
+    }
+    int keep = sctp_tsn_after(saved->tsn, tsn) &&
+        ((data->iube & 2) || (keep_parts && data->sid == keep_sid &&
+          data->sqn == keep_ssn && data->ppid == keep_ppid));
+    if (keep) {
+      keep_sid = data->sid;
+      keep_ssn = data->sqn;
+      keep_ppid = data->ppid;
+      keep_parts = !(data->iube & 1);
+      position = &saved->next;
+      continue;
+    }
+    uint32_t distance = saved->tsn - tsn;
+    if (distance > 0 && distance <= SCTP_RX_WINDOW)
+      sctp->rx_tsn_mask &= ~(1U << (distance - 1U));
+    *position = saved->next;
+    free(saved);
+    --sctp->rx_count;
+  }
+  for (size_t i = sizeof(*chunk); i < length; i += 4) {
+    uint16_t pair[2];
+    memcpy(pair, (const uint8_t*)chunk + i, sizeof(pair));
+    SctpStreamEntry* stream = sctp_rx_stream(sctp, ntohs(pair[0]));
+    uint16_t next = ntohs(pair[1]) + 1U;
+    if (stream && (int16_t)(next - stream->rx_next_ssn) > 0) stream->rx_next_ssn = next;
+  }
+  sctp_rx_advance(sctp);
+  return sctp_drain_rx(sctp);
+}
+#endif
+
 void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
-  if (!sctp)
+  if (!sctp || !buf || len < sizeof(SctpHeader) + sizeof(SctpChunkCommon))
     return;
 
 #if CONFIG_USE_USRSCTP
@@ -222,6 +1233,7 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
 #else
   size_t length = 0;
   size_t pos = sizeof(SctpHeader);
+  int stop_processing = 0;
   SctpChunkCommon* chunk_common;
   SctpPacket* in_packet = (SctpPacket*)buf;
   SctpPacket* out_packet = (SctpPacket*)sctp->buf;
@@ -244,52 +1256,71 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
 
   // prepare outgoing packet
   memset(sctp->buf, 0, sizeof(sctp->buf));
-  while ((4 * (pos + 3) / 4) < len) {
+  while (pos + sizeof(SctpChunkCommon) <= len) {
+    size_t chunk_len;
+    size_t padded_chunk_len;
+
     chunk_common = (SctpChunkCommon*)(buf + pos);
+    chunk_len = ntohs(chunk_common->length);
+    if (chunk_len < sizeof(SctpChunkCommon) || chunk_len > len - pos) {
+      LOGE("invalid SCTP chunk length %zu", chunk_len);
+      return;
+    }
+    padded_chunk_len = 4 * ((chunk_len + 3) / 4);
+    if (padded_chunk_len > len - pos) {
+      LOGE("truncated SCTP chunk padding");
+      return;
+    }
+
+    memset(sctp->buf, 0, sizeof(sctp->buf));
+    length = 0;
+    stop_processing = 0;
+    int notify_open = 0;
 
     switch (chunk_common->type) {
       case SCTP_DATA: {
-        SctpDataChunk* data_chunk = (SctpDataChunk*)(buf + pos);
-        SctpSackChunk* sack_chunk = (SctpSackChunk*)out_packet->chunks;
-
-        sack_chunk->common.type = SCTP_SACK;
-        sack_chunk->common.flags = 0x00;
-        sack_chunk->common.length = htons(16);
-        sack_chunk->cumulative_tsn_ack = data_chunk->tsn;
-        sack_chunk->a_rwnd = htonl(0x02);
-        length = ntohs(sack_chunk->common.length) + sizeof(SctpHeader);
-
-        LOGD("SCTP_DATA. ppid = %ld, data = %.2x", ntohl(data_chunk->ppid), data_chunk->data[0]);
-        if (ntohl(data_chunk->ppid) == DATA_CHANNEL_PPID_CONTROL && data_chunk->data[0] == DATA_CHANNEL_OPEN) {
-          data_chunk = (SctpDataChunk*)sack_chunk->blocks;
-          data_chunk->type = SCTP_DATA;
-          data_chunk->iube = 0x03;
-          data_chunk->tsn = htonl(sctp->tsn++);
-          data_chunk->sid = htons(0);
-          data_chunk->sqn = htons(0);
-          data_chunk->ppid = htonl(DATA_CHANNEL_PPID_CONTROL);
-          data_chunk->length = htons(1 + sizeof(SctpDataChunk));
-          data_chunk->data[0] = DATA_CHANNEL_ACK;
-          length += ntohs(data_chunk->length);
-        } else if (ntohl(data_chunk->ppid) == DATA_CHANNEL_PPID_DOMSTRING) {
-          if (sctp->onmessage) {
-            sctp->onmessage((char*)data_chunk->data, ntohs(data_chunk->length) - sizeof(SctpDataChunk),
-                            sctp->userdata, ntohs(data_chunk->sid));
-          }
+        const SctpDataChunk* data_chunk = (const SctpDataChunk*)(buf + pos);
+        if (chunk_len < sizeof(*data_chunk)) return;
+        if (sctp_receive_data(sctp, data_chunk, chunk_len) < 0) {
+          sctp_destroy_association(sctp);
+          if (sctp->onclose) sctp->onclose(sctp->userdata);
+          return;
         }
-        pos = len;  // Do not handle other msg
+        length = sctp_build_sack(sctp);
       } break;
+      case SCTP_FORWARD_TSN:
+        /* Reject malformed input before changing receive state. Errors from
+         * delivery still require the same fatal cleanup as the DATA path. */
+        if (chunk_len < sizeof(SctpForwardTsnChunk) ||
+            (chunk_len - sizeof(SctpForwardTsnChunk)) % 4U) return;
+        if (sctp_receive_forward_tsn(sctp, (const SctpForwardTsnChunk*)chunk_common,
+                                      chunk_len) < 0) {
+          sctp_destroy_association(sctp);
+          if (sctp->onclose) sctp->onclose(sctp->userdata);
+          return;
+        }
+        length = sctp_build_sack(sctp);
+        break;
       case SCTP_INIT: {
-        LOGD("SCTP_INIT");
+        LOGI("SCTP_INIT");
 
-        SctpInitChunk* init_chunk;
-        init_chunk = (SctpInitChunk*)in_packet->chunks;
+        SctpInitChunk* init_chunk = (SctpInitChunk*)(buf + pos);
+        if (chunk_len < sizeof(SctpInitChunk)) {
+          return;
+        }
+        sctp->peer_supports_forward_tsn = sctp_init_has_parameter(
+            init_chunk, chunk_len, SCTP_PARAM_FORWARD_TSN_SUPPORTED);
         sctp->verification_tag = init_chunk->initiate_tag;
+        sctp->cookie_issued = 1;
+        if (!sctp->rx_tsn_valid) {
+          sctp->rx_tsn = ntohl(init_chunk->initial_tsn) - 1U;
+          sctp->rx_tsn_valid = 1;
+        }
 
         SctpInitChunk* init_ack = (SctpInitChunk*)out_packet->chunks;
         init_ack->common.type = SCTP_INIT_ACK;
         init_ack->common.flags = 0x00;
-        init_ack->common.length = htons(20 + 8);
+        init_ack->common.length = htons(sizeof(SctpInitChunk) + 8);
         init_ack->initiate_tag = htonl(0x12345678);
         init_ack->a_rwnd = htonl(0x100000);
         init_ack->number_of_outbound_streams = 0xffff;
@@ -300,32 +1331,65 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
 
         param->type = htons(SCTP_PARAM_STATE_COOKIE);
         param->length = htons(8);
-        *(uint32_t*)&param->value = htonl(0x02);
+        uint32_t cookie_value = htonl(0x02);
+        memcpy(param->value, &cookie_value, sizeof(cookie_value));
+        sctp_append_forward_tsn_parameter(
+            (uint8_t*)param + ntohs(param->length),
+            sizeof(sctp->buf) - sizeof(SctpHeader) -
+                sizeof(SctpInitChunk) - ntohs(param->length));
+        init_ack->common.length = htons(
+            ntohs(init_ack->common.length) + sizeof(SctpChunkParam));
         length = ntohs(init_ack->common.length) + sizeof(SctpHeader);
 
-        if (!sctp->connected) {
-          sctp->connected = 1;
-          if (sctp->onopen) {
-            sctp->onopen(sctp->userdata);
-          }
-        }
       } break;
       case SCTP_INIT_ACK: {
-        SctpInitChunk* init_ack = (SctpInitChunk*)in_packet->chunks;
+        LOGI("SCTP_INIT_ACK");
+        SctpInitChunk* init_ack = (SctpInitChunk*)(buf + pos);
         SctpCookieEchoChunk* cookie_echo = (SctpCookieEchoChunk*)out_packet->chunks;
         SctpChunkParam* param = NULL;
+        size_t init_ack_len = ntohs(init_ack->common.length);
+        uint8_t* cookie;
+        uint8_t* cookie_end;
+
+        if (init_ack_len < sizeof(SctpInitChunk) || init_ack_len != chunk_len) {
+          LOGE("invalid SCTP_INIT_ACK length %zu", init_ack_len);
+          length = 0;
+          pos = len;
+          break;
+        }
         sctp->verification_tag = init_ack->initiate_tag;
-        int type;
-        // find cookie
-        uint8_t* cookie = NULL;
+        if (!sctp->rx_tsn_valid) {
+          sctp->rx_tsn = ntohl(init_ack->initial_tsn) - 1U;
+          sctp->rx_tsn_valid = 1;
+        }
+        sctp->peer_supports_forward_tsn = sctp_init_has_parameter(
+            init_ack, chunk_len, SCTP_PARAM_FORWARD_TSN_SUPPORTED);
         cookie = (uint8_t*)&init_ack->param[0];
-        for (int i = 0; i < init_ack->common.length - 20; i += 2) {
-          type = ntohs(*(uint16_t*)&cookie[i]);
-          // find cookie param
-          if (type == 0x07) {
-            param = (SctpChunkParam*)&cookie[i];
+        cookie_end = (uint8_t*)init_ack + init_ack_len;
+        while (cookie + sizeof(SctpChunkParam) <= cookie_end) {
+          SctpChunkParam* candidate = (SctpChunkParam*)cookie;
+          size_t param_len = ntohs(candidate->length);
+
+          if (param_len < sizeof(SctpChunkParam) || cookie + param_len > cookie_end) {
             break;
           }
+          if (ntohs(candidate->type) == SCTP_PARAM_STATE_COOKIE) {
+            param = candidate;
+            break;
+          }
+          cookie += 4 * ((param_len + 3) / 4);
+        }
+
+        if (!param) {
+          LOGE("SCTP_INIT_ACK has no valid state cookie");
+          length = 0;
+          pos = len;
+          break;
+        }
+
+        if (ntohs(param->length) > sizeof(sctp->buf) - sizeof(SctpHeader)) {
+          LOGE("SCTP state cookie is too large");
+          return;
         }
 
         cookie_echo->common.type = SCTP_COOKIE_ECHO;
@@ -336,14 +1400,10 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
         memcpy(cookie_echo->cookie, param->value, ntohs(param->length) - 4);
         length = ntohs(cookie_echo->common.length) + sizeof(SctpHeader);
 
-        if (!sctp->connected) {
-          sctp->connected = 1;
-          if (sctp->onopen) {
-            sctp->onopen(sctp->userdata);
-          }
-        }
       } break;
       case SCTP_SACK:
+        sctp_handle_sack(sctp, (const SctpSackChunk*)chunk_common,
+                         chunk_len);
 #if 0
         LOGD("SCTP_SACK");
         sack = (SctpSackChunk*)in_packet->chunks;
@@ -375,23 +1435,86 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
         }
 #endif
         break;
+      case SCTP_HEARTBEAT: {
+        SctpChunkCommon* heartbeat_ack = (SctpChunkCommon*)out_packet->chunks;
+
+        if (chunk_len > sizeof(sctp->buf) - sizeof(SctpHeader)) {
+          LOGE("SCTP_HEARTBEAT exceeds output buffer");
+          return;
+        }
+        memcpy(heartbeat_ack, chunk_common, chunk_len);
+        heartbeat_ack->type = SCTP_HEARTBEAT_ACK;
+        length = sizeof(SctpHeader) + chunk_len;
+        LOGI("SCTP_HEARTBEAT");
+      } break;
+      case SCTP_HEARTBEAT_ACK:
+        LOGD("SCTP_HEARTBEAT_ACK");
+        break;
       case SCTP_COOKIE_ECHO: {
-        LOGD("SCTP_COOKIE_ECHO");
+        LOGI("SCTP_COOKIE_ECHO");
+        uint32_t cookie;
+        if (chunk_len != sizeof(SctpChunkCommon) + sizeof(cookie)) return;
+        memcpy(&cookie, (const uint8_t*)chunk_common + sizeof(SctpChunkCommon), sizeof(cookie));
+        if (!sctp->cookie_issued || ntohl(cookie) != 2) return;
+        sctp_retry_clear_handshake(sctp);
         SctpChunkCommon* common = (SctpChunkCommon*)out_packet->chunks;
         common->type = SCTP_COOKIE_ACK;
         common->length = htons(4);
         length = ntohs(common->length) + sizeof(SctpHeader);
-        pos = len;  // Do not handle other msg
+        if (!sctp->connected) {
+          sctp->connected = 1;
+          notify_open = 1;
+        }
       } break;
       case SCTP_COOKIE_ACK: {
+        LOGI("SCTP_COOKIE_ACK");
+        if (!sctp->connected && sctp->retry_packet.kind == SCTP_RETRY_COOKIE_ECHO) {
+          sctp_retry_clear_handshake(sctp);
+          sctp->connected = 1;
+          notify_open = 1;
+        }
         break;
       }
-      case SCTP_ABORT:
-        sctp->connected = 0;
+      case SCTP_ABORT: {
+        uint16_t cause_code = 0;
+        uint16_t cause_length = 0;
+        char cause_reason[65] = {0};
+
+        if (chunk_len >= 8) {
+          memcpy(&cause_code, buf + pos + sizeof(SctpChunkCommon), sizeof(cause_code));
+          memcpy(&cause_length,
+                 buf + pos + sizeof(SctpChunkCommon) + sizeof(uint16_t),
+                 sizeof(cause_length));
+          cause_code = ntohs(cause_code);
+          cause_length = ntohs(cause_length);
+          if (cause_length > 4 && cause_length <= chunk_len) {
+            size_t reason_length = cause_length - 4;
+            if (reason_length > sizeof(cause_reason) - 1) {
+              reason_length = sizeof(cause_reason) - 1;
+            }
+            memcpy(cause_reason, buf + pos + sizeof(SctpChunkCommon) + 4, reason_length);
+            for (size_t i = 0; i < reason_length; i++) {
+              if ((unsigned char)cause_reason[i] < 0x20 || (unsigned char)cause_reason[i] > 0x7e) {
+                cause_reason[i] = '.';
+              }
+            }
+          }
+        }
+        if (cause_code == 12) {
+          LOGI("SCTP peer closed association: %s",
+               cause_reason[0] ? cause_reason : "user initiated abort");
+        } else {
+          LOGE("SCTP_ABORT flags=0x%02x cause=%u cause_length=%u reason=%s",
+               chunk_common->flags, cause_code, cause_length,
+               cause_reason[0] ? cause_reason : "<none>");
+        }
+        sctp_destroy_association(sctp);
         if (sctp->onclose) {
           sctp->onclose(sctp->userdata);
         }
+        stop_processing = 1;
         break;
+      }
       default:
         LOGI("Unknown chunk type %d", chunk_common->type);
         length = 0;
@@ -406,17 +1529,40 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
     if (length > 0) {
       // padding 4
       length = (4 * ((length + 3) / 4));
+      if (length > sizeof(sctp->buf)) {
+        LOGE("SCTP response exceeds output buffer");
+        return;
+      }
       out_packet->header.checksum = sctp_get_checksum(sctp, sctp->buf, length);
-      dtls_srtp_write(sctp->dtls_srtp, sctp->buf, length);
+      if (chunk_common->type == SCTP_INIT_ACK && !sctp->connected &&
+          sctp_retry_store(sctp, SCTP_RETRY_COOKIE_ECHO,
+                           sctp->buf, length, 0) < 0) {
+        return;
+      }
+      int sack_response = chunk_common->type == SCTP_DATA ||
+                          chunk_common->type == SCTP_FORWARD_TSN;
+      /* Clear before sending: a synchronous callback may queue a newer SACK. */
+      if (sack_response) sctp->rx_sack_pending = 0;
+      if (sctp_send_packet(sctp, sctp->buf, length) < 0) {
+        if (sack_response && sctp->connected) sctp->rx_sack_pending = 1;
+        if (chunk_common->type == SCTP_INIT_ACK) {
+          LOGW("SCTP COOKIE_ECHO queued for retry after send failure");
+        }
+        return;
+      }
       // sctp_outgoing_data_cb(sctp, sctp->buf, SCTP_MTU, 0, 0);
     }
-    pos += ntohs(chunk_common->length);
+    if (notify_open && sctp->onopen) sctp->onopen(sctp->userdata);
+    if (stop_processing) {
+      break;
+    }
+    pos += padded_chunk_len;
   }
 #endif
 }
 
-static int sctp_handle_incoming_data(Sctp* sctp, char* data, size_t len, uint32_t ppid, uint16_t sid, int flags) {
 #if CONFIG_USE_USRSCTP
+static int sctp_handle_incoming_data(Sctp* sctp, char* data, size_t len, uint32_t ppid, uint16_t sid, int flags) {
   switch (ppid) {
     case DATA_CHANNEL_PPID_CONTROL:
       break;
@@ -435,11 +1581,8 @@ static int sctp_handle_incoming_data(Sctp* sctp, char* data, size_t len, uint32_
     default:
       break;
   }
-#endif
   return 0;
 }
-
-#if CONFIG_USE_USRSCTP
 
 static void sctp_process_notification(Sctp* sctp, union sctp_notification* notification, size_t len) {
   if (notification->sn_header.sn_length != (uint32_t)len) {
@@ -493,10 +1636,18 @@ static int sctp_incoming_data_cb(struct socket* sock, union sctp_sockstore addr,
 #endif
 
 int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp) {
+  if (!sctp || (!dtls_srtp && !sctp->send_packet)) {
+    return -1;
+  }
+#if !CONFIG_USE_USRSCTP
+  sctp_destroy_association(sctp);
+#endif
   sctp->dtls_srtp = dtls_srtp;
   sctp->local_port = 5000;
   sctp->remote_port = 5000;
   sctp->tsn = 1234;
+  sctp->stream_count = 0;
+  sctp->next_ssn_fallback = 0;
 #if CONFIG_USE_USRSCTP
   int ret = -1;
   usrsctp_init(0, sctp_outgoing_data_cb, NULL);
@@ -595,11 +1746,32 @@ int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp) {
 
   sctp->sock = sock;
 #else
+  sctp->tx_cumulative_tsn_ack = 0;
+  sctp->last_forward_tsn = 0;
+  sctp->forward_tsn_sent = 0;
+  sctp->sack_gap_reports = 0;
+  sctp->data_retransmissions = 0;
+  sctp->data_retry_exhaustions = 0;
+  sctp->tx_cumulative_tsn_ack_valid = 0;
+  sctp->tx_abandonable_prefix_tsn = 0;
+  sctp->tx_evicted_through_tsn = 0;
+  sctp->tx_evicted_reliable_tsn = 0;
+  sctp->tx_abandonable_prefix_valid = 0;
+  sctp->tx_evicted_through_valid = 0;
+  sctp->tx_evicted_reliable_valid = 0;
+  sctp->peer_supports_forward_tsn = 0;
+  sctp->last_forward_tsn_valid = 0;
+  sctp->forward_tsn_repeat_sacks = 0;
+  memset(sctp->tx_history, 0, sizeof(sctp->tx_history));
+  memset(&sctp->retry_packet, 0, sizeof(sctp->retry_packet));
+
   // send SCTP_INIT
   int length = 0;
   SctpInitChunk* init_chunk;
   SctpHeader* header;
   SctpPacket* out_packet = (SctpPacket*)sctp->buf;
+  size_t parameter_size;
+  memset(sctp->buf, 0, sizeof(sctp->buf));
   header = &out_packet->header;
   init_chunk = (SctpInitChunk*)out_packet->chunks;
 
@@ -608,16 +1780,31 @@ int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp) {
   header->verification_tag = 0x0;
   init_chunk->common.type = SCTP_INIT;
   init_chunk->common.flags = 0x00;
-  init_chunk->common.length = htons(20);
+  init_chunk->common.length = htons(sizeof(SctpInitChunk));
   init_chunk->initiate_tag = htonl(0x12345678);
   init_chunk->a_rwnd = htonl(0x100000);
   init_chunk->number_of_outbound_streams = 0xffff;
   init_chunk->number_of_inbound_streams = 0xffff;
   init_chunk->initial_tsn = htonl(sctp->tsn);
+  parameter_size = sctp_append_forward_tsn_parameter(
+      (uint8_t*)init_chunk + sizeof(SctpInitChunk),
+      sizeof(sctp->buf) - sizeof(SctpHeader) - sizeof(SctpInitChunk));
+  if (parameter_size == 0) {
+    return -1;
+  }
+  init_chunk->common.length = htons(
+      sizeof(SctpInitChunk) + parameter_size);
   length = ntohs(init_chunk->common.length) + sizeof(SctpHeader);
   length = (4 * ((length + 3) / 4));
+  header->checksum = 0;
   header->checksum = sctp_get_checksum(sctp, sctp->buf, length);
-  dtls_srtp_write(sctp->dtls_srtp, sctp->buf, length);
+  if (sctp_retry_store(sctp, SCTP_RETRY_INIT,
+                       sctp->buf, length, 0) < 0) {
+    return -1;
+  }
+  if (sctp_send_packet(sctp, sctp->buf, length) < 0) {
+    LOGW("SCTP INIT queued for retry after send failure");
+  }
 #endif
 
   return 0;
@@ -631,11 +1818,103 @@ void sctp_destroy_association(Sctp* sctp) {
     usrsctp_finish();
     sctp->sock = NULL;
   }
+#else
+  if (sctp) {
+    sctp_retry_clear(sctp);
+    for (int i = 0; i < SCTP_MAX_STREAMS; ++i) {
+      free(sctp->dcep_retries[i]);
+      sctp->dcep_retries[i] = NULL;
+    }
+    while (sctp->tx_head) {
+      SctpTxPacket* packet = sctp->tx_head;
+      sctp->tx_head = packet->next;
+      free(packet);
+    }
+    sctp->tx_tail = NULL;
+    sctp->tx_count = 0;
+    while (sctp->rx_head) {
+      SctpRxChunk* chunk = sctp->rx_head;
+      sctp->rx_head = chunk->next;
+      free(chunk);
+    }
+    sctp->rx_count = 0;
+    sctp->rx_sack_pending = 0;
+    sctp->rx_tsn_mask = 0;
+    sctp->rx_tsn_valid = 0;
+    sctp->cookie_issued = 0;
+    sctp->connected = 0;
+    sctp->stream_count = 0;
+    memset(sctp->stream_table, 0, sizeof(sctp->stream_table));
+  }
 #endif
 }
 
 int sctp_is_connected(Sctp* sctp) {
   return sctp->connected;
+}
+
+int sctp_is_stream_open(Sctp* sctp, uint16_t sid) {
+  for (int i = 0; i < sctp->stream_count; i++) {
+    if (sctp->stream_table[i].sid == sid) {
+      return sctp->stream_table[i].open;
+    }
+  }
+  return 0;
+}
+
+uint32_t sctp_get_forward_tsn_sent(const Sctp* sctp) {
+#if CONFIG_USE_USRSCTP
+  (void)sctp;
+  return 0;
+#else
+  return sctp ? sctp->forward_tsn_sent : 0;
+#endif
+}
+
+uint32_t sctp_get_sack_gap_reports(const Sctp* sctp) {
+#if CONFIG_USE_USRSCTP
+  (void)sctp;
+  return 0;
+#else
+  return sctp ? sctp->sack_gap_reports : 0;
+#endif
+}
+
+int sctp_peer_supports_forward_tsn(const Sctp* sctp) {
+#if CONFIG_USE_USRSCTP
+  (void)sctp;
+  return 1;
+#else
+  return sctp && sctp->peer_supports_forward_tsn;
+#endif
+}
+
+uint32_t sctp_get_data_retransmissions(const Sctp* sctp) {
+#if CONFIG_USE_USRSCTP
+  (void)sctp;
+  return 0;
+#else
+  return sctp ? sctp->data_retransmissions : 0;
+#endif
+}
+
+uint32_t sctp_get_data_retry_exhaustions(const Sctp* sctp) {
+#if CONFIG_USE_USRSCTP
+  (void)sctp;
+  return 0;
+#else
+  return sctp ? sctp->data_retry_exhaustions : 0;
+#endif
+}
+
+void sctp_set_send_packet_callback(Sctp* sctp,
+                                   SctpSendPacketCallback callback,
+                                   void* user_data) {
+  if (!sctp) {
+    return;
+  }
+  sctp->send_packet = callback;
+  sctp->send_packet_user_data = user_data;
 }
 
 void sctp_onmessage(Sctp* sctp, void (*onmessage)(char* msg, size_t len, void* userdata, uint16_t sid)) {

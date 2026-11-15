@@ -1,5 +1,3 @@
-CONFIG_NEWLIB               =n
-CONFIG_NEWLIB_STANDARD      =n
 
 CONFIG_VSNPRINTF_NANO       =n
 CONFIG_VSNPRINTF_FLOAT      =y
@@ -10,6 +8,6 @@ CONFIG_BFLB_LOG             =n
 
 CONFIG_RF                   =y
 CONFIG_LMAC154              =y
-CONFIG_LMAC154_DBG          =0
-CONFIG_LMAC154_DBG_ALL      =0
+CONFIG_LMAC154_DBG          =n
+CONFIG_LMAC154_DBG_ALL      =n
 CONFIG_FREERTOS             =y

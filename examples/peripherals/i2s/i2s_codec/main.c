@@ -105,6 +105,10 @@ int main(void)
         .i2c_dev_name = "i2c0",
         .dma_tx_dev_name = "dma0_ch0",
         .dma_rx_dev_name = "dma0_ch1",
+        .capture_layout = {
+            .mic_mask = CONFIG_BOARD_AUDIO_CAPTURE_MIC_MASK,
+            .ref_mask = CONFIG_BOARD_AUDIO_CAPTURE_REF_MASK,
+        },
     };
     if (wave_player_init(&audio_hw_cfg) != 0) {
         printf("[ERROR] wave_player_init failed\r\n");

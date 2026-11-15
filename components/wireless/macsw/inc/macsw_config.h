@@ -74,9 +74,6 @@
 //#define CFG_LPM
 #undef CFG_LPM
 //#define CFG_HE_TB ??
-#ifndef RC_EZ23Q4
-#define RC_EZ23Q4 0
-#endif
 
 #ifndef RC_EZ23Q4_BCN
 #define RC_EZ23Q4_BCN 0
@@ -114,24 +111,6 @@
 #define BL_HD_RETRY_MAX 0
 #endif
 /* hacks end */
-
-/* coex */
-#ifndef CONFIG_COEX_BT_MODE
-#define CONFIG_COEX_BT_MODE 0
-#endif
-
-#ifndef CONFIG_COEX_WIFI_MODE
-#define CONFIG_COEX_WIFI_MODE 0
-#endif
-
-#ifndef CONFIG_COEX_THREAD_MOD
-#define CONFIG_COEX_THREAD_MOD 0
-#endif
-
-#ifndef CONFIG_COEX_TDMA_NONE
-#define CONFIG_COEX_TDMA_NONE 0
-#endif
-/* coex end */
 
 /* linkage feature control */
 #define MACSW_LINKSTAGE_CONF(f) \

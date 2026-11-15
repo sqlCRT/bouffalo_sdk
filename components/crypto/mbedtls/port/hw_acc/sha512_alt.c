@@ -33,6 +33,10 @@
 #include "mbedtls/platform.h"
 #include "bflb_sec_mutex.h"
 
+#ifdef BL618DG
+#include "bl618dg_glb.h"
+#endif
+
 #ifdef CONFIG_MBEDTLS_V2
 #define SHA512_VALIDATE_RET(cond)                           \
     MBEDTLS_INTERNAL_VALIDATE_RET( cond, MBEDTLS_ERR_SHA512_BAD_INPUT_DATA )
@@ -66,7 +70,14 @@ void mbedtls_sha512_init( mbedtls_sha512_context *ctx )
     ctx->sha = sha;
 
     bflb_sec_sha_mutex_take();
-    bflb_group0_request_sha_access(sha);
+#ifdef BL618DG
+    if (GLB_Get_Core_Type() == GLB_CORE_ID_NP) {
+        bflb_group1_request_sha_access(sha);
+    } else
+#endif
+    {
+        bflb_group0_request_sha_access(sha);
+    }
     bflb_sha_link_init(sha);
     bflb_sec_sha_mutex_give();
 }
@@ -183,7 +194,7 @@ int mbedtls_sha512_update( mbedtls_sha512_context *ctx,
 int mbedtls_sha512_finish_ret( mbedtls_sha512_context *ctx,
                                unsigned char output[64] )
 {
-    //int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
+    int ret;
 
     SHA512_VALIDATE_RET( ctx != NULL );
     SHA512_VALIDATE_RET( (unsigned char *)output != NULL );
@@ -191,8 +202,13 @@ int mbedtls_sha512_finish_ret( mbedtls_sha512_context *ctx,
     bflb_sec_sha_mutex_take();
     bflb_sha_link_init(ctx->sha);
     memcpy(&link_ctx_temp, &ctx->link_ctx, sizeof(struct bflb_sha512_link_ctx_s));
+    ret = 0;
     bflb_sha512_link_finish(ctx->sha, &link_ctx_temp, output);
     bflb_sec_sha_mutex_give();
+
+    if( ret != 0 )
+        return( MBEDTLS_ERR_PLATFORM_HW_ACCEL_FAILED );
+
     return( 0 );
 }
 

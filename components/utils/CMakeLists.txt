@@ -2,12 +2,19 @@ sdk_generate_library()
 
 sdk_add_include_directories(.)
 
+sdk_add_include_directories(multi_bins)
+sdk_library_add_sources(multi_bins/multi_bins.c)
+
 if(NOT DEFINED CONFIG_LOG_LEVEL)
     sdk_add_compile_definitions(-DCONFIG_LOG_LEVEL=3)
 endif()
 
 sdk_library_add_sources(log/log.c)
 sdk_add_include_directories(log)
+
+if(CONFIG_SHELL)
+    sdk_library_add_sources(log/verbosity_cli.c)
+endif()
 
 if(CONFIG_BFLB_LOG)
     sdk_library_add_sources(log/bflb_log/bflb_log.c)
