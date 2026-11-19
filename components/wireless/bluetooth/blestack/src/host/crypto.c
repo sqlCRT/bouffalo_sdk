@@ -44,6 +44,10 @@ static int prng_reseed(struct tc_hmac_prng_struct *h)
 		}
 
 		rp = (void *)rsp->data;
+		if (rsp->len < sizeof(*rp)) {
+			net_buf_unref(rsp);
+			return -EINVAL;
+		}
 		memcpy(&seed[i * 8], rp->rand, 8);
 
 		net_buf_unref(rsp);
@@ -78,6 +82,10 @@ int prng_init(void)
 	}
 
 	rp = (void *)rsp->data;
+	if (rsp->len < sizeof(*rp)) {
+		net_buf_unref(rsp);
+		return -EINVAL;
+	}
 
 	ret = tc_hmac_prng_init(&prng, rp->rand, sizeof(rp->rand));
 

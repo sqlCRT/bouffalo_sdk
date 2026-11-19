@@ -217,13 +217,13 @@ srtp_err_status_t srtp_cipher_set_iv(srtp_cipher_t *c,
                                      int direction);
 srtp_err_status_t srtp_cipher_output(srtp_cipher_t *c,
                                      uint8_t *buffer,
-                                     uint32_t *num_octets_to_output);
+                                     unsigned int *num_octets_to_output);
 srtp_err_status_t srtp_cipher_encrypt(srtp_cipher_t *c,
                                       uint8_t *buffer,
-                                      uint32_t *num_octets_to_output);
+                                      unsigned int *num_octets_to_output);
 srtp_err_status_t srtp_cipher_decrypt(srtp_cipher_t *c,
                                       uint8_t *buffer,
-                                      uint32_t *num_octets_to_output);
+                                      unsigned int *num_octets_to_output);
 srtp_err_status_t srtp_cipher_get_tag(srtp_cipher_t *c,
                                       uint8_t *buffer,
                                       uint32_t *tag_len);

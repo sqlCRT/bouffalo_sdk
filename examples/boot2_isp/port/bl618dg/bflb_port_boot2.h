@@ -61,6 +61,18 @@
 #define HAL_BOOT2_SIGN_MAXSIZE                (2048 / 8)
 #define HAL_BOOT2_SIGN_MAXSIZE_SHA384         (3072 / 8)
 #define HAL_BOOT2_DEADBEEF_VAL                0xdeadbeef
+#if !defined(CPU_MODEL_A0)
+#define HAL_BOOT2_PK_HASH_SLOT_COUNT          4U
+#define HAL_BOOT2_PK0_HASH_OFFSET             0x1CU
+#define HAL_BOOT2_PK0_HASH_EXT_OFFSET         0xC0U
+#define HAL_BOOT2_PK1_HASH_OFFSET             0x120U
+#define HAL_BOOT2_PK2_HASH_OFFSET             0x150U
+#define HAL_BOOT2_PK3_HASH_OFFSET             0x180U
+#define HAL_BOOT2_PK_HASH_REVOKE_OFFSET       0x6CU
+#define HAL_BOOT2_PK_HASH_REVOKE_POS          28U
+#define HAL_BOOT2_PK_HASH_REVOKE_MASK         0x0FU
+#define HAL_BOOT2_APP_PK0_HASH_OFFSET         0x1C0U
+#endif
 #define HAL_BOOT2_CPU0_MAGIC                  "BFNP"
 #define HAL_BOOT2_CPU1_MAGIC                  "BFAP"
 #define HAL_BOOT2_CP_FLAG                     0x02
@@ -106,6 +118,8 @@
 #define HAL_APP_SIGN_SAME_AS_BOOT2            0b001 /*!< app use the same sign key as boot2 */
 #define HAL_APP_SIGN_INDIVIDUAL_SHA256        0b010 /*!< app use its own sign key (sha256) */
 #define HAL_APP_SIGN_INDIVIDUAL_SHA384        0b100 /*!< app use its own sign key (sha384) */
+
+#define HAL_BOOT2_APP_ENCRYPT_AFTER_SIGN_MARKER 0x314C4E4FU /* "ONL1" */
 
 /* Sign type values for efuse_cfg->sign[i] and boot_img_cfg->basic_cfg.sign_type */
 #define HAL_BOOT_SIGN_TYPE_NONE              0  /*!< No signature */
@@ -208,7 +222,11 @@ typedef struct
     uint8_t hbn_check_sign;
     uint8_t app_encrypt_type;
     uint8_t app_sign_type;
+#if !defined(CPU_MODEL_A0)
+    uint8_t pk_hash_revoke;
+#else
     uint8_t rsvd[1];
+#endif
     uint8_t uart_download_cfg;
     uint8_t sf_pin_cfg;
     uint8_t keep_dbg_port_closed;
@@ -324,7 +342,8 @@ typedef struct
 {
     uint8_t img_valid;
     uint8_t pk_src;
-    uint8_t rsvd[2];
+    uint8_t encrypt_after_sign;
+    uint8_t rsvd;
 
     struct hal_basic_cfg_t basic_cfg;
 
@@ -370,6 +389,9 @@ void hal_boot2_sw_system_reset(void);
 void hal_boot2_set_psmode_status(uint32_t flag);
 void hal_boot2_clr_user_fw(void);
 void hal_boot2_get_efuse_cfg(boot2_efuse_hw_config *efuse_cfg);
+#if !defined(CPU_MODEL_A0)
+uint32_t hal_boot2_is_pkhash_valid(const boot2_efuse_hw_config *efuse_cfg, const uint8_t *pkhash, uint8_t sign_type);
+#endif
 void hal_boot2_sboot_finish(void);
 void hal_boot2_uart_gpio_init(void);
 void hal_boot2_debug_uart_gpio_init(void);

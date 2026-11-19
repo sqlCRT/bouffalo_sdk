@@ -127,13 +127,12 @@ static int es8388_codec_mode_init(audio_codec_dev_t *dev, const audio_codec_cfg_
     es8388_write_reg(i2c, addr, 0x05, 0x00);
     es8388_write_reg(i2c, addr, 0x06, 0xc3);
 
-    /* Mic input topology (ported from the original ES8388_Codec_Mode()) */
-    es8388_write_reg(i2c, addr, 0x0A, 0xf8);
-    if (cfg->mic_input_mode == AUDIO_CODEC_MIC_INPUT_SINGLE) {
-        es8388_write_reg(i2c, addr, 0x0B, 0x88);
-    } else {
-        es8388_write_reg(i2c, addr, 0x0B, 0x82);
-    }
+    /* SINGLE selects LIN1/RIN1. Otherwise use independent differential pairs:
+     * left ADC = LIN2-RIN2, right ADC = LIN1-RIN1 (DSSEL=1, DSL=1, DSR=0). */
+    es8388_write_reg(i2c, addr, 0x0A,
+                     cfg->mic_input_mode == AUDIO_CODEC_MIC_INPUT_SINGLE ? 0x00 : 0xF8);
+    es8388_write_reg(i2c, addr, 0x0B,
+                     cfg->mic_input_mode == AUDIO_CODEC_MIC_INPUT_SINGLE ? 0x02 : 0x82);
 
     tempVal = map_width(cfg->bits);
     tempVal <<= 2;
@@ -216,12 +215,11 @@ static int es8388_recording_mode_init(audio_codec_dev_t *dev, const audio_codec_
     es8388_write_reg(i2c, addr, 0x05, 0x00);
     es8388_write_reg(i2c, addr, 0x06, 0xc3);
 
-    es8388_write_reg(i2c, addr, 0x0A, 0xf8);
-    if (cfg->mic_input_mode == AUDIO_CODEC_MIC_INPUT_SINGLE) {
-        es8388_write_reg(i2c, addr, 0x0B, 0x88);
-    } else {
-        es8388_write_reg(i2c, addr, 0x0B, 0x82);
-    }
+    /* Same input topology as codec mode; keep the ADCs independent. */
+    es8388_write_reg(i2c, addr, 0x0A,
+                     cfg->mic_input_mode == AUDIO_CODEC_MIC_INPUT_SINGLE ? 0x00 : 0xF8);
+    es8388_write_reg(i2c, addr, 0x0B,
+                     cfg->mic_input_mode == AUDIO_CODEC_MIC_INPUT_SINGLE ? 0x02 : 0x82);
 
     tempVal = map_width(cfg->bits);
     tempVal <<= 2;
@@ -400,6 +398,34 @@ static int audio_codec_es8388_set_record_volume(audio_codec_dev_t *dev, int volu
     return ret;
 }
 
+static int audio_codec_es8388_set_mic_pga_channel(audio_codec_dev_t *dev,
+                                                  audio_codec_channel_t channel,
+                                                  int pga_percent)
+{
+    uint8_t regv;
+    uint8_t step;
+
+    if (dev == NULL || dev->i2c == NULL ||
+        (channel != AUDIO_CODEC_CHANNEL_LEFT && channel != AUDIO_CODEC_CHANNEL_RIGHT)) {
+        return -1;
+    }
+    if (pga_percent < 0) {
+        pga_percent = 0;
+    } else if (pga_percent > 100) {
+        pga_percent = 100;
+    }
+    step = (uint8_t)((pga_percent * 8 + 50) / 100);
+    if (es8388_read_reg(dev->i2c, dev->i2c_addr, 0x09, &regv) != 0) {
+        return -1;
+    }
+    if (channel == AUDIO_CODEC_CHANNEL_LEFT) {
+        regv = (uint8_t)((regv & 0x0fU) | (step << 4));
+    } else {
+        regv = (uint8_t)((regv & 0xf0U) | step);
+    }
+    return es8388_write_reg(dev->i2c, dev->i2c_addr, 0x09, regv);
+}
+
 static int audio_codec_es8388_set_mic_pga(audio_codec_dev_t *dev, int pga_percent)
 {
     if (dev == NULL || dev->i2c == NULL) {
@@ -454,6 +480,7 @@ const audio_codec_driver_t audio_codec_es8388_driver = {
     .set_mute = audio_codec_es8388_set_mute,
     .set_record_volume = audio_codec_es8388_set_record_volume,
     .set_mic_pga = audio_codec_es8388_set_mic_pga,
+    .set_mic_pga_channel = audio_codec_es8388_set_mic_pga_channel,
     .set_sample_rate = audio_codec_es8388_set_sample_rate,
     .calc_mclk_hz = audio_codec_es8388_calc_mclk_hz,
 };

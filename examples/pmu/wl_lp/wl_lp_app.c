@@ -36,6 +36,7 @@
 #include "bflb_rtc.h"
 #include "shell.h"
 #include "pm_manager.h"
+#include "pm_helper_cli.h"
 
 #ifdef BL616
 #define SLEEP_PDS_UA        80
@@ -75,6 +76,11 @@ uint64_t pwr_info_get(void)
     printf("LPFW active: %lldms\r\n", lp_info.active_lpfw_us / 1000);
     printf("APP active: %lldms\r\n", lp_info.active_app_us / 1000);
 
+    if (lp_info.time_total_us == 0U) {
+        printf("Predict current: unavailable (no elapsed sample)\r\n");
+        return 0;
+    }
+
     uint64_t current = (lp_info.sleep_pds_us * SLEEP_PDS_UA + lp_info.active_lpfw_us * ACTIVE_LPFW_UA + lp_info.active_app_us * ACTIVE_APP_UA) / lp_info.time_total_us;
 
     printf("Predict current: %llduA\r\n", current);
@@ -82,87 +88,68 @@ uint64_t pwr_info_get(void)
     return current;
 }
 
-void timerCallback(TimerHandle_t xTimer)
+static TimerHandle_t wakeup_timer;
+
+static void timerCallback(TimerHandle_t xTimer)
 {
-    pwr_info_get();
+    (void)xTimer;
+
+    /* Timer callbacks execute in the FreeRTOS timer daemon task and must not
+     * block on timer commands. This is a persistent one-shot timer, so no
+     * self-delete is required. */
     pm_disable_tickless();
-    xTimerDelete(xTimer, portMAX_DELAY);
+    pwr_info_get();
 }
 
-void createAndStartTimer(const char* timerName, TickType_t timerPeriod)
+static int wakeup_timer_start(uint32_t timeout_ms)
 {
-    TimerHandle_t timer = xTimerCreate(timerName,
-                                       timerPeriod,
-                                       pdTRUE,
-                                       0,
-                                       timerCallback
-                                    );
+    TickType_t timer_period = pdMS_TO_TICKS(timeout_ms);
 
-    if (timer == NULL)
-    {
-        printf("Failed to create timer.\n");
-        return;
-    }
-
-    if (xTimerStart(timer, 0) != pdPASS)
-    {
-        printf("Failed to start timer.\n");
-        return;
-    }
-}
-
-void app_pm_enter_pds15(uint32_t timeouts_ms)
-{
-    if (timeouts_ms) {
-        TickType_t timerPeriod = pdMS_TO_TICKS(timeouts_ms);
-
-        char timerName[32];
-        snprintf(timerName, sizeof(timerName), "PwrTimer_%u", (unsigned int)timerPeriod);
-
-        createAndStartTimer(timerName, timerPeriod);
-        timeouts_ms = 0;
-    }
-}
-
-int cmd_wakeup_timer(int argc, char **argv)
-{
-    uint32_t timeouts_ms;
-    int enable_bcmd = 0;
-
-    if ((argc > 2) && (argv[1] != NULL) && (argv[2] != NULL)) {
-        printf("%s\r\n", argv[1]);
-        timeouts_ms = atoi(argv[1]);
-        enable_bcmd = atoi(argv[2]);
-    } else {
-        printf("Need timeouts.\r\n");
+    if (timer_period == 0U) {
+        printf("Wakeup timeout is shorter than one OS tick.\r\n");
         return -1;
     }
 
-    enable_multicast_broadcast = enable_bcmd;
-    app_pm_enter_pds15(timeouts_ms);
-    pm_enable_tickless();
+    if (wakeup_timer == NULL) {
+        wakeup_timer = xTimerCreate("PwrTimer", timer_period, pdFALSE, NULL, timerCallback);
+        if (wakeup_timer == NULL) {
+            printf("Failed to create wakeup timer.\r\n");
+            return -1;
+        }
+    }
+
+    /* ChangePeriod also starts an inactive timer and resets an active timer,
+     * making repeated wakeup_timer commands deterministic. */
+    if (xTimerChangePeriod(wakeup_timer, timer_period, portMAX_DELAY) != pdPASS) {
+        printf("Failed to start wakeup timer.\r\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int wl_lp_wakeup_timer_start(uint32_t timeout_ms, int broadcast, void *arg)
+{
+    (void)arg;
+
+    lpfw_cfg.bcmc_dtim_mode = (uint8_t)broadcast;
+    if (wakeup_timer_start(timeout_ms) != 0) {
+        return -1;
+    }
+    if (pm_enable_tickless() != 0) {
+        (void)xTimerStop(wakeup_timer, 0);
+        return -1;
+    }
     pwr_info_clear();
 
     return 0;
 }
 
-SHELL_CMD_EXPORT_ALIAS(cmd_wakeup_timer, wakeup_timer, wakeup timer);
-
-
-static void cmd_set_dtim(int argc, char **argv)
-{	
-	int dtim = 10;
-
-    if ((argc > 1) && (argv[1] != NULL)) {
-        printf("%s\r\n", argv[1]);
-        dtim = atoi(argv[1]);
-    } else {
-        dtim = 10;
-    }
-    
-    set_dtim_config(dtim);
+static int wl_lp_tickless_start(void *arg)
+{
+    (void)arg;
+    return pm_enable_tickless();
 }
-SHELL_CMD_EXPORT_ALIAS(cmd_set_dtim, wifi_lp_set_dtim, cmd_set_dtim);
 
 
 #define BUFFER_SIZE 1024
@@ -273,5 +260,15 @@ SHELL_CMD_EXPORT_ALIAS(cmd_tcp_client, tcp_client, cmd tcp client);
 
 int ci_pm_test_init(void)
 {
-    return 0;
+    static const pm_helper_cli_cfg_t cfg = {
+        .wakeup_timer_cb = wl_lp_wakeup_timer_start,
+        .tickless_cb = wl_lp_tickless_start,
+        .arg = NULL,
+        .arp_target = PM_HELPER_CLI_ARP_GATEWAY,
+        .arp_period_seconds = 55,
+        .arp_send_immediately = false,
+        .arp_periodic = false,
+    };
+
+    return pm_helper_cli_init(&cfg);
 }

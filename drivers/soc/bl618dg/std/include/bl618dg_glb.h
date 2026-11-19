@@ -272,6 +272,7 @@ typedef struct {
 #if !defined(CPU_MODEL_A0)
     uint8_t momUpdatePeriod;
     uint8_t coarseGain;
+    uint8_t resv0_5_4;
 #endif
 } GLB_CPUPLL_CFG_BASIC_Type;
 
@@ -296,6 +297,7 @@ typedef struct {
   uint8_t lms_ext_en;       /*!< Enable external LMS coefficients (1) and disable internal LMS block */
   uint8_t lms_ext_value;    /*!< External LMS coefficient value (e.g. tt50=0.68 equivalent) */
   uint8_t bitclk_div;       /*!< Output bit clock divider (DSI) applied after VCO/main output */
+  uint8_t resv0_1_0;
 } GLB_DSIPLL_CFG_BASIC_Type;
 
 typedef struct {
@@ -400,14 +402,6 @@ typedef struct {
 #define GLB_PERI_DMA_AUADC_RX               (21) /*!< audio_adc_rx */
 #if defined(CPU_MODEL_A0)
 #define GLB_PERI_DMA_DAC                    (23) /*!< gpdac */
-#define GLB_PERI_DMA_PEC_SM0_RX             (24) /*!< pec_sm0_rx */
-#define GLB_PERI_DMA_PEC_SM1_RX             (25) /*!< pec_sm1_rx */
-#define GLB_PERI_DMA_PEC_SM2_RX             (26) /*!< pec_sm2_rx */
-#define GLB_PERI_DMA_PEC_SM3_RX             (27) /*!< pec_sm3_rx */
-#define GLB_PERI_DMA_PEC_SM0_TX             (28) /*!< pec_sm0_tx */
-#define GLB_PERI_DMA_PEC_SM1_TX             (29) /*!< pec_sm1_tx */
-#define GLB_PERI_DMA_PEC_SM2_TX             (30) /*!< pec_sm2_tx */
-#define GLB_PERI_DMA_PEC_SM3_TX             (31) /*!< pec_sm3_tx */
 #else
 #define GLB_PERI_DMA_DSI_TX                 (22) /*!< dsi_tx */
 #define GLB_PERI_DMA_DSI_RX                 (23) /*!< dsi_rx */
@@ -415,15 +409,6 @@ typedef struct {
 #define GLB_PERI_DMA_SPI1_TX                (25) /*!< spi1_tx */
 #define GLB_PERI_DMA_SPI2_RX                (26) /*!< spi2_rx */
 #define GLB_PERI_DMA_SPI2_TX                (27) /*!< spi2_tx */
-
-#define GLB_PERI_DMA_PEC_SM0_TX             (28) /*!< pec_sm0_tx, only for DMA0 */
-#define GLB_PERI_DMA_PEC_SM1_TX             (29) /*!< pec_sm1_tx, only for DMA0 */
-#define GLB_PERI_DMA_PEC_SM2_TX             (28) /*!< pec_sm2_tx, only for DMA1 */
-#define GLB_PERI_DMA_PEC_SM3_TX             (29) /*!< pec_sm3_tx, only for DMA1 */
-#define GLB_PERI_DMA_PEC_SM0_RX             (30) /*!< pec_sm0_rx, only for DMA0 */
-#define GLB_PERI_DMA_PEC_SM1_RX             (31) /*!< pec_sm1_rx, only for DMA0 */
-#define GLB_PERI_DMA_PEC_SM2_RX             (30) /*!< pec_sm2_rx, only for DMA1 */
-#define GLB_PERI_DMA_PEC_SM3_RX             (31) /*!< pec_sm3_rx, only for DMA1 */
 #endif
 /**
   * @}
@@ -473,15 +458,6 @@ typedef struct {
   */
 #define GLB_SPI_CLK_WIFIPLL_160M            (0) /*!< Select WIFIPLL 160M as SPI clock */
 #define GLB_SPI_CLK_XCLK                    (1) /*!< Select xclk as SPI clock */
-/**
-  * @}
-  */
-
-/** @defgroup GLB PEC clock type definition
-  * @{
-  */
-#define GLB_PEC_CLK_MUXPLL_160M             (0) /*!< Select MUXPLL 160M as PEC clock */
-#define GLB_PEC_CLK_XCLK                    (1) /*!< Select xclk as PEC clock */
 /**
   * @}
   */
@@ -966,7 +942,7 @@ typedef struct {
 #define GLB_PSRAMB_CLK_BCLK               (0) /*!< bus clock */
 #define GLB_PSRAMB_CLK_480M               (1) /*!< 480m */
 #define GLB_PSRAMB_CLK_320M               (2) /*!< 320m */
-#define GLB_PSRAMB_CLK_240M               (3) /*!< 240m */
+#define GLB_PSRAMB_CLK_CPUPLL_DIV1        (3) /*!< cpu pll divided by 1 */
 
 /** @defgroup GLB UART clock type definition
   * @{
@@ -1439,15 +1415,7 @@ typedef union {
                                     ((type) == GLB_PERI_DMA_ADC1) || \
                                     ((type) == GLB_PERI_DMA_DBI_TX) || \
                                     ((type) == GLB_PERI_DMA_AUADC_RX) || \
-                                    ((type) == GLB_PERI_DMA_DAC) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM0_RX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM1_RX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM2_RX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM3_RX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM0_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM1_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM2_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM3_TX))
+                                    ((type) == GLB_PERI_DMA_DAC))
 #else
 #define IS_GLB_PERI_DMA_TYPE(type) (((type) == GLB_PERI_DMA_UART0_RX) || \
                                     ((type) == GLB_PERI_DMA_UART0_TX) || \
@@ -1475,15 +1443,7 @@ typedef union {
                                     ((type) == GLB_PERI_DMA_SPI1_RX) || \
                                     ((type) == GLB_PERI_DMA_SPI1_TX) || \
                                     ((type) == GLB_PERI_DMA_SPI2_RX) || \
-                                    ((type) == GLB_PERI_DMA_SPI2_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM0_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM1_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM2_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM3_TX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM0_RX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM1_RX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM2_RX) || \
-                                    ((type) == GLB_PERI_DMA_PEC_SM3_RX))
+                                    ((type) == GLB_PERI_DMA_SPI2_TX))
 #endif
 
 /** @defgroup  GLB_PERI_DMA_CN_SEL_TYPE
@@ -1518,12 +1478,6 @@ typedef union {
  */
 #define IS_GLB_SPI_CLK_TYPE(type) (((type) == GLB_SPI_CLK_WIFIPLL_160M) || \
                                    ((type) == GLB_SPI_CLK_XCLK))
-
-/** @defgroup  GLB_PEC_CLK_TYPE
- *  @{
- */
-#define IS_GLB_PEC_CLK_TYPE(type) (((type) == GLB_PEC_CLK_MUXPLL_160M) || \
-                                   ((type) == GLB_PEC_CLK_XCLK))
 
 /** @defgroup  GLB_PWM1_IO_SEL_TYPE
  *  @{
@@ -2098,7 +2052,6 @@ BL_Err_Type GLB_Set_SPI0_CLK(uint8_t enable, uint8_t clkSel, uint8_t div);
 BL_Err_Type GLB_Set_SPI0_2_CLK(uint8_t enable, uint8_t clkSel, uint8_t div);
 #endif
 BL_Err_Type GLB_SPI_Sig_Swap_Set(uint8_t group, uint8_t swap);
-BL_Err_Type GLB_Set_PEC_CLK(uint8_t enable, uint8_t clkSel, uint8_t div);
 BL_Err_Type GLB_Set_PWM1_IO_Sel(uint8_t ioSel);
 BL_Err_Type GLB_Set_PDM_IO_Sel(uint8_t ioSel);
 BL_Err_Type GLB_Set_DBI_CLK(uint8_t enable, uint8_t clkSel, uint8_t div);

@@ -226,16 +226,9 @@ static void notify_connected(struct bt_conn *conn)
 {
 	struct bt_conn_cb *cb;
 
-#if defined(CONFIG_BT_BREDR)
-	if (conn->type == BT_CONN_TYPE_BR && conn->err) {
-		if (atomic_test_bit(bt_dev.flags, BT_DEV_ISCAN)) {
-			atomic_clear_bit(bt_dev.flags, BT_DEV_ISCAN);
-		}
-		if (atomic_test_bit(bt_dev.flags, BT_DEV_PSCAN)) {
-			atomic_clear_bit(bt_dev.flags, BT_DEV_PSCAN);
-		}
-	}
-#endif
+	/* A failed BR/EDR connection does not change the Scan Enable configuration.
+	 * Keep scan flags synchronized with successful Write Scan Enable commands.
+	 */
 
 	for (cb = callback_list; cb; cb = cb->_next) {
 		if (cb->connected) {
@@ -257,16 +250,10 @@ void notify_disconnected(struct bt_conn *conn)
 {
 	struct bt_conn_cb *cb;
 
-#if defined(CONFIG_BT_BREDR)
-	if (conn->type == BT_CONN_TYPE_BR) {
-		if (atomic_test_bit(bt_dev.flags, BT_DEV_ISCAN)) {
-			atomic_clear_bit(bt_dev.flags, BT_DEV_ISCAN);
-		}
-	if (atomic_test_bit(bt_dev.flags, BT_DEV_PSCAN)) {
-			atomic_clear_bit(bt_dev.flags, BT_DEV_PSCAN);
-		}
-	}
-#endif
+	/* BR/EDR disconnection does not change the Scan Enable configuration.
+	 * Preserve scan flags: they track the configuration, not scan activity,
+	 * which may be suspended when no connection slots are available.
+	 */
 
 	for (cb = callback_list; cb; cb = cb->_next) {
 		if (cb->disconnected) {
@@ -761,13 +748,37 @@ struct bt_conn *bt_conn_create_br(const bt_addr_t *peer,
 
 	bt_conn_set_state(conn, BT_CONN_CONNECT);
 	conn->role = BT_CONN_ROLE_MASTER;
-#if defined(BFLB_BREDR_PATCH_FIX_BREDR_CONN_REF_AFTER_ROLE_SWITCH)
-	/* Mark original master role, survives role switch */
+	/* Record the connection direction independently of the current role. */
 	atomic_set_bit(conn->flags, BT_CONN_BR_INITIAL_MASTER);
-#endif
 
 	//bt_conn_unref(conn);
 	return conn;
+}
+
+int bt_conn_br_switch_role(struct bt_conn *conn, u8_t role)
+{
+	struct bt_hci_cp_switch_role *cp;
+	struct net_buf *buf;
+
+	if (!conn || conn->type != BT_CONN_TYPE_BR ||
+	    (role != BT_CONN_ROLE_MASTER && role != BT_CONN_ROLE_SLAVE)) {
+		return -EINVAL;
+	}
+	if (conn->state != BT_CONN_CONNECTED) {
+		return -ENOTCONN;
+	}
+	if (conn->role == role) {
+		return -EALREADY;
+	}
+
+	buf = bt_hci_cmd_create(BT_HCI_OP_SWITCH_ROLE, sizeof(*cp));
+	if (!buf) {
+		return -ENOBUFS;
+	}
+	cp = net_buf_add(buf, sizeof(*cp));
+	memcpy(&cp->bdaddr, &conn->br.dst, sizeof(cp->bdaddr));
+	cp->role = role == BT_CONN_ROLE_MASTER ? BT_HCI_ROLE_MASTER : BT_HCI_ROLE_SLAVE;
+	return bt_hci_cmd_send(BT_HCI_OP_SWITCH_ROLE, buf);
 }
 
 struct bt_conn *bt_conn_create_sco(const bt_addr_t *peer,const struct esco_para *para)
@@ -1257,6 +1268,10 @@ static int bt_hci_connect_br_cancel(struct bt_conn *conn)
 	}
 
 	rp = (void *)rsp->data;
+	if (rsp->len < sizeof(*rp)) {
+		net_buf_unref(rsp);
+		return -EINVAL;
+	}
 
 	err = rp->status ? -EIO : 0;
 
@@ -1390,6 +1405,10 @@ u8_t bt_conn_enc_key_size(struct bt_conn *conn)
 		}
 
 		rp = (void *)rsp->data;
+		if (rsp->len < sizeof(*rp)) {
+			net_buf_unref(rsp);
+			return 0;
+		}
 
 		key_size = rp->status ? 0 : rp->key_size;
 
@@ -2214,9 +2233,9 @@ static struct bt_conn *conn_lookup_handle(struct bt_conn *pool,
 	return NULL;
 }
 
-struct bt_conn *bt_conn_lookup_handle(u16_t handle)
+struct bt_conn *bt_conn_lookup_handle(u16_t handle, int type)
 {
-	struct bt_conn *conn;
+	struct bt_conn *conn = NULL;
 
 #if (CONFIG_BLE_USING_DYNAMIC_RAM)
 	if (!conns) {
@@ -2226,20 +2245,29 @@ struct bt_conn *bt_conn_lookup_handle(u16_t handle)
 
 	conn = conn_lookup_handle(conns, CONFIG_BT_MAX_CONN, handle);
 	if (conn) {
-		return conn;
+		goto found;
 	}
 
 #if defined(CONFIG_BT_BREDR)
 	conn = conn_lookup_handle(br_conns, CONFIG_BT_ACL_CONN, handle);
 	if (conn) {
-		return conn;
+		goto found;
 	}
 
 	conn = conn_lookup_handle(sco_conns, CONFIG_BT_MAX_SCO_CONN, handle);
 	if (conn) {
-		return conn;
+		goto found;
 	}
 #endif
+
+found:
+	if (conn) {
+		if (type & conn->type) {
+			return conn;
+		}
+		BT_WARN("incompatible handle %u", handle);
+		bt_conn_unref(conn);
+	}
 
 	return NULL;
 }

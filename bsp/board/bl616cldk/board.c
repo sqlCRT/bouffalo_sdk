@@ -22,26 +22,30 @@
 #include "bl616cl_tzc_sec.h"
 #include "bl616cl_pm.h"
 
+#include <time.h>
+
 #include "bl616cl_glb.h"
 
 #include "board_flash_psram.h"
 
 #include "mm.h"
+#if defined(CONFIG_PSRAM) || defined(CONFIG_PSRAM_XIP)
+#include "psram_heap_init.h"
+#endif
 
 extern void log_start(void);
 
 extern uint32_t __HeapBase;
 extern uint32_t __HeapLimit;
-extern uint32_t __psram_heap_base;
-extern uint32_t __psram_limit;
-
-extern uint32_t __psram_data_start__;
-extern uint32_t __psram_data_end__;
-extern uint32_t __psram_noinit_data_start__;
-extern uint32_t __psram_noinit_data_end__;
 
 extern uint32_t _heap_wifi_start;
 extern uint32_t _heap_wifi_size;
+
+static const uint32_t any_alloc_order[] = {
+    MM_HEAP_OCRAM_0,
+    MM_HEAP_PSRAM_0,
+    MM_HEAP_WRAM_0,
+};
 
 #if (defined(CONFIG_LUA) || defined(CONFIG_BFLB_LOG) || defined(CONFIG_FATFS))
 static struct bflb_device_s *rtc;
@@ -91,7 +95,7 @@ static void ATTR_CLOCK_SECTION __attribute__((noinline)) system_clock_init(void)
 #endif
 }
 
-#ifndef LP_APP
+#ifndef CONFIG_LPAPP
 static void peripheral_clock_init(void)
 {
     PERIPHERAL_CLOCK_ADC_DAC_ENABLE();
@@ -109,7 +113,6 @@ static void peripheral_clock_init(void)
     PERIPHERAL_CLOCK_CAN_ENABLE();
     PERIPHERAL_CLOCK_AUDIO_ENABLE();
     PERIPHERAL_CLOCK_CKS_ENABLE();
-    PERIPHERAL_CLOCK_PEC_ENABLE();
 
     GLB_Set_UART_CLK(ENABLE, HBN_UART_CLK_XCLK, 0);
     GLB_Set_SPI0_CLK(ENABLE, GLB_SPI_CLK_MCU_MUXPLL_160M, 0);
@@ -122,7 +125,6 @@ static void peripheral_clock_init(void)
     GLB_Set_PWM1_IO_Sel(GLB_PWM1_IO_SINGLE_END);
     GLB_Set_IR_CLK(ENABLE, GLB_IR_CLK_SRC_XCLK, 19);
     GLB_Set_CAM_CLK(ENABLE, GLB_CAM_CLK_WIFIPLL_96M, 3);
-    GLB_Set_PEC_CLK(ENABLE, GLB_PEC_CLK_MCU_MUXPLL_160M, 0);
 
     GLB_Set_PKA_CLK_Sel(GLB_PKA_CLK_WIFIPLL_320M);
 
@@ -243,11 +245,51 @@ void bl_show_component_version(void)
     }
 }
 
+void bflb_show_trim_info(void)
+{
+    struct bflb_device_s *efuse_dev;
+    bflb_ef_ctrl_com_trim_t trim;
+    const char *trim_list[] = {
+        "rcal",
+        "psram_trim",
+        "gpadc_offset",
+        "rc32k_cap",
+        "rc32m",
+        "usb20",
+        "ldo08_trim",
+        "ldo18_trim",
+        "ldosoc_trim",
+        "ldo13_trim",
+        "gpadc_vref",
+        "tsen",
+        "gpadc_gain"
+    };
+
+    efuse_dev = bflb_device_get_by_name("ef_ctrl");
+    if (NULL == efuse_dev) {
+        printf("efuse device driver not found!\r\n");
+        while (1)
+            ;
+    }
+
+    for (int i = 0; i < sizeof(trim_list) / sizeof(trim_list[0]); i++) {
+        bflb_ef_ctrl_read_common_trim(NULL, (char*)trim_list[i], &trim, 1);
+        if (trim.en) {
+            if (trim.parity == bflb_ef_ctrl_get_trim_parity(trim.value, trim.len)) {
+                printf("trim %s value=%d!\r\n", trim_list[i], trim.value);
+            } else {
+                printf("trim %s parity error!\r\n", trim_list[i]);
+            }
+        } else {
+            printf("trim %s not done!\r\n", trim_list[i]);
+        }
+    }
+}
+
 #if defined(CONFIG_BSP_CONSOLE_USB_CDC)
 /* USB console is initialized after interrupts are restored. */
 #elif defined(CONFIG_CONSOLE_WO)
 extern void bflb_wo_set_console(struct bflb_device_s *dev);
-
 static void console_init()
 {
     struct bflb_device_s *wo;
@@ -289,7 +331,7 @@ static void console_init()
 }
 #endif
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 void board_recovery(void)
 {
 #ifdef CONF_PSRAM_RESTORE
@@ -338,32 +380,13 @@ void ram_heap_init(void)
         puts("psram init fail !!!\r\n");
         while (1) {}
     }
-
-    /* psram heap init */
-    heap_len = ((size_t)&__psram_limit - (size_t)&__psram_heap_base);
-#ifndef CONFIG_PSRAM_SKIP_REGISTER_HEAP
-    mm_register_heap(MM_HEAP_PSRAM_0, "PSRAM", MM_ALLOCATOR_TLSF, &__psram_heap_base, heap_len);
 #endif
-
-    /* ram info dump */
-    printf("dynamic memory init success\r\n"
-           "  ocram heap size: %d Kbyte, \r\n"
-           "  psram heap size: %d Kbyte\r\n",
-           ((size_t)&__HeapLimit - (size_t)&__HeapBase) / 1024,
-           ((size_t)&__psram_limit - (size_t)&__psram_heap_base) / 1024);
-
-#else
-    /* check psram data */
-    if (&__psram_data_end__ - &__psram_data_start__ > 0 || &__psram_noinit_data_end__ - &__psram_noinit_data_start__ > 0) {
-        puts("psram data already exists, please enable CONFIG_PSRAM\r\n");
-        while (1) {}
-    }
 
     /* ram info dump */
     printf("dynamic memory init success\r\n"
            "  ocram heap size: %d Kbyte \r\n",
            ((size_t)&__HeapLimit - (size_t)&__HeapBase) / 1024);
-#endif
+
 }
 
 #define D(field, t) printf(#field ":" #t "\r\n", field)
@@ -374,6 +397,11 @@ static void ebreak_cpu(void)
     __ASM volatile("ebreak");
 }
 #undef D
+
+enum bflb_rtc_32k_clk_type board_get_rtc_32k_clk_type(void)
+{
+    return BFLB_RTC_32K_CLK_RC;
+}
 
 void board_init(void)
 {
@@ -402,7 +430,9 @@ void board_init(void)
     /* system clock */
     system_clock_init();
 
-#ifndef LP_APP
+    bflb_rtc_init(NULL, board_get_rtc_32k_clk_type());
+
+#ifndef CONFIG_LPAPP
     peripheral_clock_init();
 #else
     peripheral_clock_init_lp();
@@ -430,6 +460,10 @@ void board_init(void)
 
     /* ram and heap init (including psram) */
     ram_heap_init();
+#if defined(CONFIG_PSRAM) || defined(CONFIG_PSRAM_XIP)
+    ram_psram_heap_init();
+#endif
+    mm_heap_set_any_alloc_order(any_alloc_order, sizeof(any_alloc_order) / sizeof(any_alloc_order[0]));
 
     /* boot info dump */
 #ifndef CONFIG_BOARD_SHOW_LOG_DISABLE
@@ -437,6 +471,8 @@ void board_init(void)
 #endif
     /* version info dump */
     bl_show_component_version();
+    /* trim info dump */
+    bflb_show_trim_info();
 
 #if defined(CONFIG_ANTI_ROLLBACK) && !defined(CONFIG_BOOT2)
     bflb_check_anti_rollback();
@@ -599,7 +635,7 @@ static void mfg_cmd(int argc, char **argv)
 }
 SHELL_CMD_EXPORT_ALIAS(mfg_cmd, mfg, mfg);
 
-#ifdef LP_APP
+#ifdef CONFIG_LPAPP
 #include "bl_lp.h"
 
 static void test_io_wakeup_status(uint8_t io_num)
@@ -680,7 +716,7 @@ void cmd_io_test(char *buf, int len, int argc, char **argv)
 }
 
 SHELL_CMD_EXPORT_ALIAS(cmd_io_test, io_test, cmd io_test);
-#endif /* LP_APP */
+#endif /* CONFIG_LPAPP */
 
 #endif /* CONFIG_SHELL */
 

@@ -1378,6 +1378,41 @@ static int cmd_rec_sd_format(int argc, char **argv)
 
 SHELL_CMD_EXPORT_ALIAS(cmd_rec_sd_format, rec_sd_format, "format SD card to FAT32: rec_sd_format confirm");
 
+/* This recorder stores mono. Keep channel policy here, not in audio_player;
+ * array processing can instead consume the original interleaved callback. */
+static void rec_store_on_interleaved_frame(const wave_player_rec_frame_t *frame, void *user_data)
+{
+    if (frame == NULL) return;
+    const int16_t *samples = frame->samples;
+    uint32_t sample_count = frame->samples_per_channel;
+    const uint8_t channels = frame->channels;
+    const uint32_t mask = frame->layout.mic_mask;
+    static int16_t mono[REC_VAD_MAX_FRAME_SAMPLES];
+    if (samples == NULL || channels == 0U || channels > 16U || mask == 0U ||
+        ((mask | frame->layout.ref_mask) >> channels) != 0U ||
+        (mask & frame->layout.ref_mask) != 0U) {
+        return;
+    }
+    uint32_t selected = 0U;
+    for (uint32_t c = 0U; c < channels; c++) {
+        if (mask & (1U << c)) selected++;
+    }
+    while (sample_count > 0U) {
+        uint32_t n = sample_count;
+        if (n > REC_VAD_MAX_FRAME_SAMPLES) n = REC_VAD_MAX_FRAME_SAMPLES;
+        for (uint32_t i = 0U; i < n; i++) {
+            int32_t sum = 0;
+            for (uint32_t c = 0U; c < channels; c++) {
+                if (mask & (1U << c)) sum += samples[i * channels + c];
+            }
+            mono[i] = (int16_t)(sum / (int32_t)selected);
+        }
+        rec_store_on_frame(mono, n, frame->sample_rate_hz, user_data);
+        samples += n * channels;
+        sample_count -= n;
+    }
+}
+
 static int cmd_rec_vad_diag(int argc, char **argv)
 {
 #ifdef CONFIG_LIBFVAD
@@ -1488,7 +1523,7 @@ int recorder_storage_init(void)
     rec_vad_diag_reset_locked();
 #endif
 
-    if (wave_player_rec_set_callback(rec_store_on_frame, NULL) != 0) {
+    if (wave_player_rec_set_callback(rec_store_on_interleaved_frame, NULL) != 0) {
         printf("[ERROR] set record callback failed\r\n");
         return -1;
     }

@@ -6,9 +6,17 @@
 #include <string.h>
 #include "lmac154_frame.h"
 
+#ifndef CONFIG_LMAC154_DBG
+#define CONFIG_LMAC154_DBG 0
+#endif
+
+#ifndef CONFIG_LMAC154_DBG_ALL
+#define CONFIG_LMAC154_DBG_ALL 0
+#endif
+
 #define VERSION_LMAC154_MAJOR 1
-#define VERSION_LMAC154_MINOR 7
-#define VERSION_LMAC154_PATCH 10
+#define VERSION_LMAC154_MINOR 8
+#define VERSION_LMAC154_PATCH 1
 
 // #define VERSION_LMAC154_SRC_EXTRA_INFO "customer-1"
 
@@ -184,7 +192,18 @@ typedef enum {
     LMAC154_RX_STATUS_RX_DONE       = 1,
     LMAC154_RX_STATUS_ACK_SENT      = 2,
     LMAC154_RX_STATUS_ACK_ERR       = 3,
+    LMAC154_RX_STATUS_ERR_RX_IN_TX  = 4,
 } lmac154_rx_status_t;
+
+/**
+ * @brief TX pipeline state of a frame (lmac154_txParam_t.tx_state)
+ */
+typedef enum {
+    LMAC154_TX_IDLE     = 0,    /**< queued, the radio is not owned yet */
+    LMAC154_TX_CSMA,            /**< software-CSMA backoff running (alarm 6) */
+    LMAC154_TX_TXING,           /**< handed to the hardware (HW CSMA / on air) */
+    LMAC154_TX_WAIT_ACK,        /**< frame sent, waiting for the peer ACK (alarm 7 deadline) */
+} lmac154_tx_state_t;
 
 typedef struct lmac154_receiveInfo lmac154_receiveInfo_t;
 
@@ -209,6 +228,8 @@ struct lmac154_receiveInfo {
     int8_t                          dbg_ack_cost;
     int8_t                          dbg_csl_drift_ack;
     uint16_t                        dbg_csl_ack_phase;
+    uint8_t                         rx_channel;
+    uint8_t                         resume_channel;
     uint32_t                        rx_done_symbol_cnt;
     union {
         uint16_t                    saddr;
@@ -241,6 +262,7 @@ typedef struct {
     uint32_t *                      c_data;      /* Encrypted output buffer */
 } lmac154_security_t;
 
+/** delayed-tx timing: base_time + delay_time is the sfd on-air moment */
 typedef struct {
     uint32_t                        base_time;
     uint32_t                        delay_time;
@@ -254,6 +276,9 @@ typedef struct {
     int8_t                          csl_tx_offset_sym_cnt;
     int8_t                          dbg_csl_drift_tx;
     uint16_t                        dbg_csl_tx_phase;
+    uint32_t                        dbg_sfd_est_sym;
+    int16_t                         dbg_csl_ie_comp_avg;
+    int16_t                         dbg_csl_ie_comp;
 } lmac154_csl_opt_t;
 
 typedef struct __lmac154_txParam_ext { 
@@ -265,11 +290,11 @@ typedef struct __lmac154_txParam_ext {
     uint32_t                        is_cca:1;
     uint32_t                        is_ack_required:1;
     uint32_t                        is_enh_ack_required:1;
-    uint32_t                        is_tx_doing:1;
+    uint32_t                        tx_state:3;
     uint32_t                        is_last_tx:1;
     uint32_t                        is_base_param:1;
     uint32_t                        is_tx_security:1;
-    uint32_t                        unused:5;
+    uint32_t                        unused:3;
     uint32_t                        ack_rx_done_symbol_cnt;
     lmac154_txDoneCallback_t        tx_done_cb;
     struct __lmac154_txParam_ext *  next;
@@ -291,10 +316,10 @@ typedef struct __lmac154_txParam {
     uint32_t                        is_cca:1;
     uint32_t                        is_ack_required:1;
     uint32_t                        is_enh_ack_required:1;
-    uint32_t                        is_tx_doing:1;
+    uint32_t                        tx_state:3;
     uint32_t                        is_last_tx:1;
     uint32_t                        is_base_param:1;
-    uint32_t                        unused:6;
+    uint32_t                        unused:4;
     uint32_t                        ack_rx_done_symbol_cnt;
     lmac154_txDoneCallback_t        tx_done_cb;
     struct __lmac154_txParam_ext *  next;
@@ -439,6 +464,14 @@ int lmac154_monitor(uint32_t monitor_timeout);
  *
  * @return The lmac154 interrupt handler
  *
+ * @note  Use this handler for the legacy single-stack send/receive path.
+ *        Send entry points: lmac154_triggerTx()
+ *        Receive control: lmac154_enableRx(), lmac154_forceEnableRX(), and
+ *        lmac154_disableRx()
+ *        Interrupt-context event callbacks: lmac154_txDoneEvent(),
+ *        lmac154_ackEvent(), lmac154_ackFrameEvent(), lmac154_rxDoneEvent(),
+ *        lmac154_rxStartEvent(), and lmac154_hwAutoTxAckDoneEvent().
+ * 
 *******************************************************************************/
 lmac154_isr_t lmac154_getInterruptHandler(void);
 
@@ -464,6 +497,15 @@ bool lmac154_registerEventCallback(lmac154_stack_idx_t stack_idx,
  *
  * @return The m154 irq handler
  *
+ * @note  Use this callback for the dual-stack send/receive path.
+ *        Send entry points: lmac154_triggerParamTx(),
+ *        lmac154_triggerParamTxExt(), and lmac154_writeTxAckFrame().
+ *        Receive control: lmac154_enableRx(), lmac154_forceEnableRX(), and
+ *        lmac154_disableRx(), lmac154_enableRxTimed(), lmac154_disableRxTimed().
+ *        Register stack receive callbacks with
+ *        lmac154_registerEventCallback() and enable stacks with
+ *        lmac154_enable1stStack() or lmac154_enable2ndStack().
+ * 
 *******************************************************************************/
 lmac154_isr_t lmac154_getInterruptCallback(void);
 
@@ -556,6 +598,39 @@ void lmac154_forceEnableRX(void);
 void lmac154_disableRx(void);
 
 /****************************************************************************//**
+ * @brief  Open a timed RX window (CSL receive)
+ *
+ *         If a TX owns the radio the open is deferred and happens when the TX
+ *         ends; alarm 9 closes the window when the duration expires, deferred
+ *         while a frame is still being received or its ACK transmission has
+ *         not completed. TX frames requested while the window is open are
+ *         queued and start when it closes. A window requested while another
+ *         one is executing is queued behind it. The duration is signed: a
+ *         window whose end has already passed (non-positive duration) or one
+ *         shorter than the minimum exchange time is rejected.
+ *
+ * @param  duration_sym: window duration in M154 symbols
+ *
+ * @return 0 when accepted, -1 otherwise
+ *
+ *******************************************************************************/
+int lmac154_enableRxTimed(int duration_sym, lmac154_channel_t channel);
+
+/****************************************************************************//**
+ * @brief  Close an open timed RX window (also closes plain RX)
+ *
+ *         While a frame/ACK exchange or a frame reception is in flight the
+ *         close is deferred until it completes, exactly like the alarm-9 path.
+ *
+ * @param  channel: the channel of the window to close
+ *
+ * @return true when a window was actually closed
+ *
+ *******************************************************************************/
+bool lmac154_disableRxTimed(lmac154_channel_t channel);
+
+
+/****************************************************************************//**
  * @brief  Set rx on/off state when idle state
  *
  * @param  isRxOnWhenIdle: true is rx on when idle; otherwhile is rx off when idle
@@ -617,7 +692,7 @@ int lmac154_triggerParamTx(lmac154_txParam_t * txParam);
  * @brief  Trigger TX with extended parameter set.
  *         Performs CSMA-CA backoff (hardware or software), sets up the MPDU,
  *         configures CSL IE if applicable, and triggers the radio transmit.
- *         Must be called within critical section.
+ *         Better to be called within critical section.
  *
  * @param  txParam: pointer to lmac154_txParam_ext_t
  *

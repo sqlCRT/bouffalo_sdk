@@ -10,6 +10,16 @@ config FREERTOS
     help
       Build applications on top of FreeRTOS.  Disable for bare-metal projects.
 
+config FREERTOS_INTERNAL_WRAM_FALLBACK
+    bool "Allow FreeRTOS to fall back to internal WRAM"
+    depends on FREERTOS && CHIP = "bl616"
+    default n
+    help
+      Try the registered internal WRAM heap if OCRAM cannot satisfy an RTOS
+      allocation. Uses only internal memory, never PSRAM or Bluetooth EM.
+      Enable only when the board registers unused WRAM as a general heap.
+      The default preserves the SDK's OCRAM-only allocation policy.
+
 config PS_EXTEND
     bool "FreeRTOS power-save extension"
     default n
@@ -49,6 +59,13 @@ config CLOCK_SOURCE_EF_PARAM
     default n
     help
       Select the system clock source from eFuse parameters at runtime.
+
+config PM_HELPER_CLI
+    bool "Power management helper commands"
+    default n
+    depends on SHELL
+    help
+      Enable shared low-power shell commands and network keepalive helpers.
 
 endif # CONFIG_PWRMGMT
 

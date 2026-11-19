@@ -282,7 +282,49 @@ static const ATTR_TCM_CONST_SECTION bflb_flash_secreg_param_t flash_secreg_param
     .lb_read_loop = 1,
 };
 
+/* IS25LP256H: four 256-byte Information Rows, Function Register IRL[3:0]. */
+__UNUSED static const ATTR_TCM_CONST_SECTION bflb_flash_secreg_param_t flash_secreg_param_issi_25lp256h = {
+    .region_offset = 0,
+    .region_count = 4,
+    .region_size = 0x10,
+    .secreg_size = 0x1,
+    .api_type = BFLB_FLASH_SECREG_API_TYPE_ISSI,
+    .lb_share = 0,
+    .lb_offset = 4,
+    .lb_write_cmd = 0x42,
+    .lb_write_len = 1,
+    .lb_read_cmd[0] = 0x48,
+    .lb_read_len = 1,
+    .lb_read_loop = 1,
+};
+
 __UNUSED static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_params[] = {
+    {
+        /*!< XM25QH512D */
+        .jedec_id = 0x204020,
+        .param = flash_secreg_param_gd_25q256d_25s512md,
+    },
+
+    {
+        /*!< IS25LP256H */
+        .jedec_id = 0x19609d,
+        .param = flash_secreg_param_issi_25lp256h,
+    },
+    {
+        /*!< IS25LP01GJ */
+        .jedec_id = 0x21609d,
+        .param = flash_secreg_param_issi_25lp256h,
+    },
+    {
+        /*!< IS25LP01G */
+        .jedec_id = 0x1b609d,
+        .param = flash_secreg_param_issi_25lp256h,
+    },
+    {
+        /*!< IS25WP01G */
+        .jedec_id = 0x1b709d,
+        .param = flash_secreg_param_issi_25lp256h,
+    },
 
     {
         /*!< BY25Q80BS */
@@ -308,6 +350,11 @@ __UNUSED static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_params[
         /*!< BY25Q128AS */
         .jedec_id = 0x184068,
         .param = flash_secreg_param_winb_80ew_16fw_32jw_32fw_32fv,
+    },
+    {
+        /*!< BY25FQ256ES */
+        .jedec_id = 0x194068,
+        .param = flash_secreg_param_gd_wq32e_q128e,
     },
     {
         /*!< FM25Q08 */
@@ -590,6 +637,11 @@ __UNUSED static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_params[
         .param = flash_secreg_param_winb_80ew_16fw_32jw_32fw_32fv,
     },
     {
+        /*!< W25Q02RV-JM */
+        .jedec_id = 0x2270ef,
+        .param = flash_secreg_param_winb_80ew_16fw_32jw_32fw_32fv,
+    },
+    {
         /*!< XM25QH80B */
         .jedec_id = 0x144020,
         .param = flash_secreg_param_winb_80ew_16fw_32jw_32fw_32fv,
@@ -623,6 +675,11 @@ __UNUSED static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_params[
         /*!< XM25QH128C */
         .jedec_id = 0x184020,
         .param = flash_secreg_param_winb_80ew_16fw_32jw_32fw_32fv,
+    },
+    {
+        /*!< XM25EH512D */
+        .jedec_id = 0x204620,
+        .param = flash_secreg_param_gd_25q256d_25s512md,
     },
     {
         /*!< XT25F04D */
@@ -951,9 +1008,9 @@ int ATTR_TCM_SECTION bflb_flash_secreg_region_foreach(bflb_flash_otp_config_t *o
             break;
         }
     }
-#endif
 
     return 0;
+#endif
 }
 
 /*****************************************************************************
@@ -1028,7 +1085,7 @@ int ATTR_TCM_SECTION bflb_flash_secreg_set_lockbits(bflb_flash_otp_config_t *otp
     } else {
         /* Calculate valid bits mask based on region count */
         lb_mask = ~(0xff << param->region_count);
-        if (lb_mask & lockbits) {
+        if (lockbits & ~lb_mask) {
             /*!< invalid lockbits */
             return -1;
         }
@@ -1388,11 +1445,15 @@ int ATTR_TCM_SECTION bflb_flash_secreg_get_info(bflb_flash_otp_config_t *otp_cfg
 
     uint8_t index;
 
-    if (param == NULL) {
+    if (param == NULL || info == NULL || param->secreg_size == 0) {
         return -1;
     }
 
-    index = addr / param->secreg_size;
+    index = addr / (param->secreg_size * 256);
+
+    if (index >= param->region_count) {
+        return -1;
+    }
 
     return bflb_flash_secreg_get_info_by_idx(otp_cfg, index, info);
 #endif

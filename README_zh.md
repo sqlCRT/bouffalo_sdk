@@ -2,24 +2,11 @@
 
 [English Version](README.md)
 
-# DS5Dongle BL618 — 自定义补丁
-
-本 fork 基于 SDK v2.3.32，为 DS5Dongle BL618 项目做了以下修改：
-
-### 蓝牙（经典 BR/EDR）
-- **HID Host net_buf_pool** — 注册 `hid_tx_pool` / `hid_rx_pool` 到 `net_buf_pool` 列表，解决 BT HID 主机缓冲区问题
-- **L2CAP BR 超时** — L2CAP BR 配置超时从 2s 增加到 10s，提升重连可靠性
-- **L2CAP BR 发送回调** — 新增 `bt_l2cap_br_chan_send_cb()`，基于 HCI-ACK 的流控
-- **Sniff 模式修复**（cherry-pick v2.3.33）— 修复 SCO 接受条件、启用 sniff 链路策略、添加 `MODE_CHANGE` 事件掩码、sniff 进出改用同步发送
-
-### USB 音频
-- **Linux 音频兼容** — 处理 `SET_RES` / `SET_MIN` / `SET_MAX` 音频类请求（修复 Linux 下 USB 音频不工作的问题）
-
-### Flash 驱动
-- **80MHz 降频回退** — 80MHz flash 时钟失败时自动尝试 60MHz / 48MHz
-- **PLL 探测前复位** — 降频探测前先将 PLL 复位到标准 `sdmin`
-
----
+> v2.3.37 使用精简 Git 历史以缩短 `git pull` 时间；如需在本地将其与 v2.3.36 串成完整历史，请执行：
+>
+> ```bash
+> git replace -f --graft 'v2.3.37-history-base^{}' 'v2.3.36^{}'
+> ```
 
 # 简介
 
@@ -102,6 +89,7 @@
 | Networking | LWIP                    | https://github.com/lwip-tcpip/lwip                           | 2.1.2                             |
 | Networking | PPP                     | https://github.com/ppp-project/ppp                           | Unknown. Managed by upstream LWIP |
 | Utils      | cJSON                   | https://github.com/DaveGamble/cJSON                          | 1.7.18                            |
+| Runtime    | WAMR                    | https://github.com/wasm-micro-runtime/wasm-micro-runtime     | 2.4.4                             |
 | WLAN       | hostapd, wpa_supplicant | https://w1.fi/cgit/hostap                                    | v2.10-devel                       |
 | BSP        | CherryUSB               | https://github.com/cherry-embedded/CherryUSB                 | v1.5.2                            |
 | BSP        | FatFS                   | http://elm-chan.org/fsw/ff/                                  | R0.15                             |
@@ -120,10 +108,10 @@
 
 ## 工具链
 
-- windows 下使用 [riscv64-unknown-elf-gcc](https://gitee.com/bouffalolab/toolchain_gcc_t-head_windows)
-- Linux 下使用 [riscv64-unknown-elf-gcc](https://gitee.com/bouffalolab/toolchain_gcc_t-head_linux)
-- T-HEAD 官方没有提供 macos toolchain, 需要自行编译，参考 [build_toolchain_macos](https://github.com/p4ddy1/pine_ox64/blob/main/build_toolchain_macos.md)
-- 编译 linux 时使用 [linux-riscv64-linux-gcc](https://gitee.com/bouffalolab/linuxtoolchain_gcc_t-head)
+请从以下地址下载 SDK 工具链：
+
+- 国外：[GitHub](https://github.com/bouffalolab/toolchain/releases/tag/default)
+- 国内：[Gitee](https://gitee.com/bouffalolab/toolchain/releases/tag/latest)
 
 ## 命令行编译
 

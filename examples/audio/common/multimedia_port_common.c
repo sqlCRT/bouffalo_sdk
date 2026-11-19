@@ -68,7 +68,7 @@ uint32_t g_pa_delay_2 = 90;     /* this is time set according to the pa manual *
 static struct bflb_device_s *i2s0;
 static audio_codec_dev_t g_es8388_dev = { 0 };
 static int g_codec_mute = 0;
-static int g_codec_volume_percent = 30;
+static int g_codec_volume_percent = 80;
 
 static void i2s_gpio_init(void)
 {
@@ -367,7 +367,8 @@ int msp_i2s_device_config(const msp_i2s_device_cfg_t *config)
     bflb_i2s_link_rxdma(i2s0, true);
 #endif
     bflb_i2s_feature_control(i2s0, I2S_CMD_CHANNEL_LR_MERGE, true);
-    bflb_i2s_feature_control(i2s0, I2S_CMD_DATA_ENABLE, I2S_CMD_DATA_ENABLE_TX | I2S_CMD_DATA_ENABLE_RX);
+    bflb_i2s_feature_control(i2s0, I2S_CMD_ENABLE_CONTROL,
+                            I2S_ARG_CMD_MASTER | I2S_ARG_CMD_TX | I2S_ARG_CMD_RX);
 
     if (msp_codec_reconfigure(config) != 0) {
         return -1;
@@ -398,7 +399,7 @@ void msp_i2s_tx_enable(void)
     //put to msp_i2s_device_init
 #if 0
     if (i2s0) {
-        //bflb_i2s_feature_control(i2s0, I2S_CMD_DATA_ENABLE, I2S_CMD_DATA_ENABLE_TX);
+        //bflb_i2s_feature_control(i2s0, I2S_CMD_ENABLE_CONTROL, I2S_ARG_CMD_MASTER | I2S_ARG_CMD_TX);
     }
 #endif
 }
@@ -408,7 +409,7 @@ void msp_i2s_rx_enable(void)
     //put to msp_i2s_device_init
 #if 0
     if (i2s0) {
-        //bflb_i2s_feature_control(i2s0, I2S_CMD_DATA_ENABLE, I2S_CMD_DATA_ENABLE_RX | I2S_CMD_DATA_ENABLE_TX);
+        //bflb_i2s_feature_control(i2s0, I2S_CMD_ENABLE_CONTROL, I2S_ARG_CMD_MASTER | I2S_ARG_CMD_RX | I2S_ARG_CMD_TX);
     }
 #endif
 }

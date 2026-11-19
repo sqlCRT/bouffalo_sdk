@@ -32,6 +32,7 @@ typedef uint8_t audio_codec_type_t;
 #define AUDIO_CODEC_TYPE_JY6166  ((audio_codec_type_t)7)
 #define AUDIO_CODEC_TYPE_JY6316  ((audio_codec_type_t)8)
 #define AUDIO_CODEC_TYPE_AC101S  ((audio_codec_type_t)9)
+#define AUDIO_CODEC_TYPE_ACM8852 ((audio_codec_type_t)10)
 
 typedef uint8_t audio_codec_i2s_fmt_t;
 #define AUDIO_CODEC_I2S_FMT_I2S     ((audio_codec_i2s_fmt_t)0)
@@ -43,6 +44,10 @@ typedef uint8_t audio_codec_bits_t;
 #define AUDIO_CODEC_BITS_16 ((audio_codec_bits_t)16)
 #define AUDIO_CODEC_BITS_24 ((audio_codec_bits_t)24)
 #define AUDIO_CODEC_BITS_32 ((audio_codec_bits_t)32)
+
+typedef uint8_t audio_codec_channel_t;
+#define AUDIO_CODEC_CHANNEL_LEFT  ((audio_codec_channel_t)0)
+#define AUDIO_CODEC_CHANNEL_RIGHT ((audio_codec_channel_t)1)
 
 typedef uint8_t audio_codec_mic_input_t;
 /* Some codecs can switch mic input topology.
@@ -67,7 +72,14 @@ typedef struct {
     bool enable_adc;
     bool enable_dac;
     audio_codec_work_mode_t work_mode; /* optional, codec-specific */
-    audio_codec_mic_input_t mic_input_mode; /* optional, codec-specific */
+    /* Optional, codec-specific. ES8388 SINGLE now selects LIN1/RIN1; otherwise
+     * left ADC = LIN2-RIN2 and right ADC = LIN1-RIN1, without analog mono mix.
+     * This replaces the BSP's legacy F8/88 mono mix. Review wiring and DMA
+     * slot selection when migrating. The separate soln_utils codec API
+     * retains its legacy routing.
+     * Single-ended input 2 requires a codec-specific route; selecting an I2S
+     * mono source changes DMA extraction, not these analog input selectors. */
+    audio_codec_mic_input_t mic_input_mode;
 } audio_codec_cfg_t;
 
 typedef struct {
@@ -110,6 +122,12 @@ int audio_codec_set_record_volume(audio_codec_dev_t *dev, int volume_percent);
  * Each codec maps the percentage to its step range.
  */
 int audio_codec_set_mic_pga(audio_codec_dev_t *dev, int pga_percent);
+/* Configure one analog input without increasing the AEC reference input.
+ * Drivers without independent channel control use their existing PGA setter.
+ */
+int audio_codec_set_mic_pga_channel(audio_codec_dev_t *dev,
+                                    audio_codec_channel_t channel,
+                                    int pga_percent);
 int audio_codec_set_sample_rate(audio_codec_dev_t *dev, uint32_t sample_rate_hz);
 
 /* Simple helper: typical codecs use MCLK = Fs * 256.

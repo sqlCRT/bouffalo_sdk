@@ -39,10 +39,8 @@ enum {
 	#if defined(BFLB_BLE_AVOID_REMOVE_GATT_SUBSCRIPTION_RISK)
 	BT_CONN_GATT_REMOVE_SUBSCRIPTION_GOING,
 	#endif
-	#if defined(BFLB_BREDR_PATCH_FIX_BREDR_CONN_REF_AFTER_ROLE_SWITCH)
-	/* BR/EDR: original master role, survives role switch */
+	/* BR/EDR: locally initiated connection, survives role switch. */
 	BT_CONN_BR_INITIAL_MASTER,
-	#endif
 	/* Total number of flags - must be at the end of the enum */
 	BT_CONN_NUM_FLAGS,
 };
@@ -252,7 +250,7 @@ void bt_conn_ssp_auth_complete(struct bt_conn *conn, u8_t status);
 void bt_conn_disconnect_all(u8_t id);
 
 /* Look up an existing connection */
-struct bt_conn *bt_conn_lookup_handle(u16_t handle);
+struct bt_conn *bt_conn_lookup_handle(u16_t handle, int type);
 
 /* Compare an address with bt_conn destination address */
 int bt_conn_addr_le_cmp(const struct bt_conn *conn, const bt_addr_le_t *peer);

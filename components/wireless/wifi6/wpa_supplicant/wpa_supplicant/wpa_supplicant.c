@@ -4134,6 +4134,29 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 	params.sae_pwe = wpa_s->conf->sae_pwe;
 #endif /* CONFIG_SAE */
 
+	/* Seconds passed to MACSW, then reused by the success-path auth timer.
+	 * Default is 60s. ap_scan==1 uses 10s (IBSS 20s, or 5s with ONLY_STA_AP_MODE).
+	 * A non-zero auth_timeout overrides that. This is not the EAPOL timer. */
+	{
+		int auth_assoc_sec = 60;
+
+		if (wpa_s->conf->ap_scan == 1) {
+#ifndef CONFIG_ONLY_STA_AP_MODE
+			auth_assoc_sec = ssid->mode == WPAS_MODE_IBSS ? 20 : 10;
+#else
+			auth_assoc_sec = 5;
+#endif
+		}
+		if (wpa_s->current_ssid && wpa_s->current_ssid->auth_timeout > 0)
+			auth_assoc_sec = wpa_s->current_ssid->auth_timeout;
+		else if (!wpa_s->current_ssid && ssid && ssid->auth_timeout > 0)
+			auth_assoc_sec = ssid->auth_timeout;
+		/* One ke_timer delay must stay under 300 s. */
+		if (auth_assoc_sec > 299)
+			auth_assoc_sec = 299;
+		params.auth_assoc_timeout_sec = auth_assoc_sec;
+	}
+
 	ret = wpa_drv_associate(wpa_s, &params);
 	os_free(wpa_ie);
 	if (ret < 0) {
@@ -4174,22 +4197,22 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 		wpa_supplicant_cancel_auth_timeout(wpa_s);
 #endif /* CONFIG_IBSS_RSN */
 	} else {
-		/* Timeout for IEEE 802.11 authentication and association */
-		int timeout = 60;
+		/* Driver rejected the connect: keep the old 5s timer (IBSS 10s).
+		 * Otherwise use the same seconds already given to MACSW. */
+		int timeout;
 
 		if (assoc_failed) {
-			/* give IBSS a bit more time */
-			timeout = ssid->mode == WPAS_MODE_IBSS ? 10 : 5;
-		} else if (wpa_s->conf->ap_scan == 1) {
-			/* give IBSS a bit more time */
 #ifndef CONFIG_ONLY_STA_AP_MODE
-			timeout = ssid->mode == WPAS_MODE_IBSS ? 20 : 10;
+			timeout = ssid->mode == WPAS_MODE_IBSS ? 10 : 5;
 #else
 			timeout = 5;
 #endif
+			if (wpa_s->current_ssid && wpa_s->current_ssid->auth_timeout)
+				timeout = wpa_s->current_ssid->auth_timeout;
+		} else {
+			timeout = params.auth_assoc_timeout_sec;
 		}
-		int this_to = (wpa_s->current_ssid) ? (wpa_s->current_ssid->auth_timeout) : timeout;
-		wpa_supplicant_req_auth_timeout(wpa_s, this_to ? this_to : timeout, 0);
+		wpa_supplicant_req_auth_timeout(wpa_s, timeout, 0);
 	}
 
 #ifdef CONFIG_WEP

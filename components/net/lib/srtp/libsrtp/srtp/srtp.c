@@ -1391,7 +1391,7 @@ static srtp_err_status_t srtp_process_header_encryption(
         while (xtn_hdr_data < xtn_hdr_end) {
             uint8_t xid = (*xtn_hdr_data & 0xf0) >> 4;
             unsigned int xlen = (*xtn_hdr_data & 0x0f) + 1;
-            uint32_t xlen_with_header = 1 + xlen;
+            unsigned int xlen_with_header = 1 + xlen;
             xtn_hdr_data++;
 
             if (xtn_hdr_data + xlen > xtn_hdr_end)
@@ -1428,7 +1428,7 @@ static srtp_err_status_t srtp_process_header_encryption(
         while (xtn_hdr_data + 1 < xtn_hdr_end) {
             uint8_t xid = *xtn_hdr_data;
             unsigned int xlen = *(xtn_hdr_data + 1);
-            uint32_t xlen_with_header = 2 + xlen;
+            unsigned int xlen_with_header = 2 + xlen;
             xtn_hdr_data += 2;
 
             if (xtn_hdr_data + xlen > xtn_hdr_end)
@@ -1689,6 +1689,7 @@ static srtp_err_status_t srtp_protect_aead(srtp_ctx_t *ctx,
     srtp_hdr_t *hdr = (srtp_hdr_t *)rtp_hdr;
     uint32_t *enc_start;    /* pointer to start of encrypted portion  */
     int enc_octet_len = 0;  /* number of octets in encrypted portion  */
+    unsigned int cipher_octet_len;
     srtp_xtd_seq_num_t est; /* estimated xtd_seq_num_t of *hdr        */
     int delta;              /* delta of local pkt idx and that in hdr */
     srtp_err_status_t status;
@@ -1807,8 +1808,10 @@ static srtp_err_status_t srtp_protect_aead(srtp_ctx_t *ctx,
     }
 
     /* Encrypt the payload  */
+    cipher_octet_len = (unsigned int)enc_octet_len;
     status = srtp_cipher_encrypt(session_keys->rtp_cipher, (uint8_t *)enc_start,
-                                 (unsigned int *)&enc_octet_len);
+                                 &cipher_octet_len);
+    enc_octet_len = (int)cipher_octet_len;
     if (status) {
         return srtp_err_status_cipher_fail;
     }
@@ -2054,7 +2057,8 @@ srtp_err_status_t srtp_protect_mki(srtp_ctx_t *ctx,
     srtp_err_status_t status;
     int tag_len;
     srtp_stream_ctx_t *stream;
-    uint32_t prefix_len;
+    unsigned int prefix_len;
+    unsigned int cipher_octet_len;
     srtp_hdr_xtnd_t *xtn_hdr = NULL;
     unsigned int mki_size = 0;
     srtp_session_keys_t *session_keys = NULL;
@@ -2314,9 +2318,10 @@ srtp_err_status_t srtp_protect_mki(srtp_ctx_t *ctx,
 
     /* if we're encrypting, exor keystream into the message */
     if (enc_start) {
-        status =
-            srtp_cipher_encrypt(session_keys->rtp_cipher, (uint8_t *)enc_start,
-                                (unsigned int *)&enc_octet_len);
+        cipher_octet_len = (unsigned int)enc_octet_len;
+        status = srtp_cipher_encrypt(session_keys->rtp_cipher,
+                                     (uint8_t *)enc_start, &cipher_octet_len);
+        enc_octet_len = (int)cipher_octet_len;
         if (status)
             return srtp_err_status_cipher_fail;
     }
@@ -2383,7 +2388,8 @@ srtp_err_status_t srtp_unprotect_mki(srtp_ctx_t *ctx,
     srtp_err_status_t status;
     srtp_stream_ctx_t *stream;
     uint8_t tmp_tag[SRTP_MAX_TAG_LEN];
-    uint32_t tag_len, prefix_len;
+    uint32_t tag_len;
+    unsigned int prefix_len;
     srtp_hdr_xtnd_t *xtn_hdr = NULL;
     unsigned int mki_size = 0;
     srtp_session_keys_t *session_keys = NULL;
@@ -3871,7 +3877,7 @@ srtp_err_status_t srtp_protect_rtcp_mki(srtp_t ctx,
     srtp_err_status_t status;
     int tag_len;
     srtp_stream_ctx_t *stream;
-    uint32_t prefix_len;
+    unsigned int prefix_len;
     uint32_t seq_num;
     unsigned int mki_size = 0;
     srtp_session_keys_t *session_keys = NULL;
@@ -4104,7 +4110,7 @@ srtp_err_status_t srtp_unprotect_rtcp_mki(srtp_t ctx,
     unsigned int auth_len;
     int tag_len;
     srtp_stream_ctx_t *stream;
-    uint32_t prefix_len;
+    unsigned int prefix_len;
     uint32_t seq_num;
     int e_bit_in_packet; /* whether the E-bit was found in the packet */
     int sec_serv_confidentiality; /* whether confidentiality was requested */

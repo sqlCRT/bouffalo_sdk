@@ -99,7 +99,7 @@ srtp_err_status_t srtp_cipher_set_iv(srtp_cipher_t *c,
 
 srtp_err_status_t srtp_cipher_output(srtp_cipher_t *c,
                                      uint8_t *buffer,
-                                     uint32_t *num_octets_to_output)
+                                     unsigned int *num_octets_to_output)
 {
     /* zeroize the buffer */
     octet_string_set_to_zero(buffer, *num_octets_to_output);
@@ -110,7 +110,7 @@ srtp_err_status_t srtp_cipher_output(srtp_cipher_t *c,
 
 srtp_err_status_t srtp_cipher_encrypt(srtp_cipher_t *c,
                                       uint8_t *buffer,
-                                      uint32_t *num_octets_to_output)
+                                      unsigned int *num_octets_to_output)
 {
     if (!c || !c->type || !c->state) {
         return (srtp_err_status_bad_param);
@@ -121,7 +121,7 @@ srtp_err_status_t srtp_cipher_encrypt(srtp_cipher_t *c,
 
 srtp_err_status_t srtp_cipher_decrypt(srtp_cipher_t *c,
                                       uint8_t *buffer,
-                                      uint32_t *num_octets_to_output)
+                                      unsigned int *num_octets_to_output)
 {
     if (!c || !c->type || !c->state) {
         return (srtp_err_status_bad_param);

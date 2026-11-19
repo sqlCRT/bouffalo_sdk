@@ -46,7 +46,7 @@ static volatile bool dbi_async_callback_en_flag = true;
 
 /* dma device */
 static struct bflb_device_s *dbi_dma_hd;
-/* pec dbi typeB device */
+/* sim dbi typeB device */
 static struct bflb_device_s *dbi_hd;
 
 /* The memory space of DMA */

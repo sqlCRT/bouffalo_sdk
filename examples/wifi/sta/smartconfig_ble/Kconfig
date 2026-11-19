@@ -1,4 +1,10 @@
 mainmenu "SDK Configuration"
 
-source "$BL_SDK_BASE/Kconfig"
+config BFLB_BLESYNC
+    bool "Build BLE smartconfig synchronization"
+    default n
+    depends on BLUETOOTH
+    help
+      Build the BLE synchronization service used by this example.
 
+source "$BL_SDK_BASE/Kconfig"

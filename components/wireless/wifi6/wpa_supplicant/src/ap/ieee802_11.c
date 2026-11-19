@@ -55,6 +55,10 @@
 #include "fils_hlp.h"
 #include "dpp_hostapd.h"
 #include "gas_query_ap.h"
+#ifdef CONFIG_WIFI_WDS
+#include "fhost.h"
+#include "fhost_wds.h"
+#endif
 
 
 #ifdef CONFIG_FILS
@@ -1004,6 +1008,13 @@ static int sae_sm_step(struct hostapd_data *hapd, struct sta_info *sta,
 	if (auth_transaction != 1 && auth_transaction != 2)
 		return WLAN_STATUS_UNSPECIFIED_FAILURE;
 
+	/* A Commit starting or restarting SAE begins a new attempt. */
+	if (auth_transaction == 1 &&
+	    (sta->sae->state == SAE_NOTHING ||
+	     sta->sae->state == SAE_CONFIRMED ||
+	     sta->sae->state == SAE_ACCEPTED))
+		sta->credential_mismatch_reported = 0;
+
 	wpa_printf(MSG_DEBUG, "SAE: Peer " MACSTR " state=%s auth_trans=%u",
 		   MAC2STR(sta->addr), sae_state_txt(sta->sae->state),
 		   auth_transaction);
@@ -1441,6 +1452,8 @@ static void handle_auth_sae(struct hostapd_data *hapd, struct sta_info *sta,
 
 		if (!(hapd->conf->mesh & MESH_ENABLED) &&
 		    sta->sae->state == SAE_COMMITTED) {
+			/* The existing restart path below begins a new attempt. */
+			sta->credential_mismatch_reported = 0;
 			/* This is needed in the infrastructure BSS case to
 			 * address a sequence where a STA entry may remain in
 			 * hostapd across two attempts to do SAE authentication
@@ -1566,6 +1579,13 @@ static void handle_auth_sae(struct hostapd_data *hapd, struct sta_info *sta,
 			}
 
 			if (sae_check_confirm(sta->sae, var, var_len) < 0) {
+				if (sta->sae->confirm_mismatch &&
+				    !sta->credential_mismatch_reported) {
+					sta->credential_mismatch_reported = 1;
+					wpa_msg(hapd->msg_ctx, MSG_INFO,
+						AP_STA_POSSIBLE_SAE_CREDENTIAL_MISMATCH
+						MACSTR, MAC2STR(sta->addr));
+				}
 				resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
 				goto reply;
 			}
@@ -4068,6 +4088,8 @@ static u16 check_multi_ap(struct hostapd_data *hapd, struct sta_info *sta,
 	if (multi_ap_ie) {
 		const u8 *multi_ap_subelem;
 
+		if (multi_ap_len < 4)
+			return WLAN_STATUS_INVALID_IE;
 		multi_ap_subelem = get_ie(multi_ap_ie + 4,
 					  multi_ap_len - 4,
 					  MULTI_AP_SUB_ELEM_TYPE);
@@ -4974,6 +4996,25 @@ static int add_associated_sta(struct hostapd_data *hapd,
 		   !!(sta->flags & WLAN_STA_AUTHORIZED),
 		   wpa_auth_sta_ft_tk_already_set(sta->wpa_sm),
 		   wpa_auth_sta_fils_tk_already_set(sta->wpa_sm));
+
+#ifdef CONFIG_WIFI_WDS
+	{
+		int vif = fhost_vif_idx_from_name(hapd->conf->iface);
+
+		/* sta_remove clears the auto peer. Reject first so a reassoc
+		 * that drops Multi-AP does not delete the current STA. */
+		if (vif >= 0 &&
+		    fhost_wds_auto_sta_admit(vif, sta->addr,
+					     !!(sta->flags & WLAN_STA_MULTI_AP)) !=
+		    WIFI_WDS_OK) {
+			wpa_printf(MSG_INFO,
+				   "WDS AUTO refused STA " MACSTR " backhaul=%d",
+				   MAC2STR(sta->addr),
+				   !!(sta->flags & WLAN_STA_MULTI_AP));
+			return -1;
+		}
+	}
+#endif /* CONFIG_WIFI_WDS */
 
 	if (!sta->added_unassoc &&
 	    (!(sta->flags & WLAN_STA_AUTHORIZED) ||
@@ -6464,6 +6505,7 @@ static void handle_assoc_cb(struct hostapd_data *hapd,
 		status = le_to_host16(mgmt->u.reassoc_resp.status_code);
 	else
 		status = le_to_host16(mgmt->u.assoc_resp.status_code);
+
 
 	if (!ok) {
 		hostapd_logger(hapd, mgmt->da, HOSTAPD_MODULE_IEEE80211,

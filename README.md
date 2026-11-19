@@ -2,24 +2,11 @@
 
 [中文版](README_zh.md)
 
-# DS5Dongle BL618 — Custom Patches
-
-This fork contains the following modifications for the DS5Dongle BL618 project (based on SDK v2.3.32):
-
-### Bluetooth (Classic BR/EDR)
-- **HID Host net_buf_pool** — Register `hid_tx_pool` / `hid_rx_pool` in `net_buf_pool` list for BT HID host
-- **L2CAP BR timeout** — Increase L2CAP BR configuration timeouts from 2s to 10s for reconnect reliability
-- **L2CAP BR send callback** — Add `bt_l2cap_br_chan_send_cb()` for HCI-ACK based flow control
-- **Sniff mode fixes** (cherry-pick from v2.3.33) — Fix SCO accept condition, enable sniff link policy, add `MODE_CHANGE` event mask, use sync send for sniff enter/exit
-
-### USB Audio
-- **Linux audio class compatibility** — Handle `SET_RES` / `SET_MIN` / `SET_MAX` audio class requests (fixes USB audio on Linux)
-
-### Flash Driver
-- **80MHz fallback** — Try 60MHz / 48MHz fallback when 80MHz flash clock fails
-- **PLL reset before probe** — Reset PLL to standard `sdmin` before fallback speed probe
-
----
+> v2.3.37 uses a compact Git history to reduce `git pull` time; run this command locally to join it with v2.3.36:
+>
+> ```bash
+> git replace -f --graft 'v2.3.37-history-base^{}' 'v2.3.36^{}'
+> ```
 
 # Introduction
 
@@ -101,11 +88,12 @@ Note：**√** means supported ; **×** means not supported; **○** means suppo
 | ---------- | ----------------------- | ------------------------------------------------------------ | --------------------------------- |
 | Multimedia | xwebsocket              | https://github.com/OlehKulykov/librws                        | 9-Jan-19                          |
 | Networking | MQTT-C                  | https://github.com/LiamBindle/MQTT-C                         | 1.1.2                             |
-| Bluetooth  | NimBLE                  | https://github.com/apache/mynewt-nimble                      | 1.5.0                             |
+| Bluetooth  | blestack                | https://github.com/zephyrproject-rtos/zephyr                 | 2.1.0                             |
 | Bluetooth  | sbc                     | https://android.googlesource.com/platform/external/bluetooth/bluedroid/ | UnKnown                           |
 | Networking | LWIP                    | https://github.com/lwip-tcpip/lwip                           | 2.1.2                             |
 | Networking | PPP                     | https://github.com/ppp-project/ppp                           | Unknown. Managed by upstream LWIP |
 | Utils      | cJSON                   | https://github.com/DaveGamble/cJSON                          | 1.7.18                            |
+| Runtime    | WAMR                    | https://github.com/wasm-micro-runtime/wasm-micro-runtime     | 2.4.4                             |
 | WLAN       | hostapd, wpa_supplicant | https://w1.fi/cgit/hostap                                    | v2.10                             |
 | BSP        | CherryUSB               | https://github.com/cherry-embedded/CherryUSB                 | v1.5.3                            |
 | BSP        | FatFS                   | http://elm-chan.org/fsw/ff/                                  | R0.14c                            |
@@ -129,11 +117,10 @@ Note：**√** means supported ; **×** means not supported; **○** means suppo
 
 ## Toolchain
 
-- [riscv64-unknown-elf-gcc](https://github.com/bouffalolab/toolchain_gcc_t-head_windows) toolchain used in windows.
-- [riscv64-unknown-elf-gcc](https://github.com/bouffalolab/toolchain_gcc_t-head_linux) toolchain used in linux.
-- T-HEAD official does not provide macos toolchain, so you should build by yourself, refer to [build_toolchain_macos](https://github.com/p4ddy1/pine_ox64/blob/main/build_toolchain_macos.md).
-- [linux-riscv64-linux-gcc](https://gitee.com/bouffalolab/linuxtoolchain_gcc_t-head) toolchain used for compiling linux code.
-- [riscv64-zephyr-elf](https://github.com/zephyrproject-rtos/sdk-ng/releases/tag/v1.0.0) toolchain used for compiling BL618DG.
+Download the SDK toolchain from one of the following locations:
+
+- Global: [GitHub](https://github.com/bouffalolab/toolchain/releases/tag/default)
+- China: [Gitee](https://gitee.com/bouffalolab/toolchain/releases/tag/latest)
 
 ## Command Line Development
 

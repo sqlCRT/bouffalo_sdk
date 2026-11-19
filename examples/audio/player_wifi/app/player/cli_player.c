@@ -10,7 +10,7 @@
 #include <media.h>
 
 #ifdef CONFIG_SHELL
-#include <devices/drv_snd_bl616.h>
+#include <devices/drv_snd.h>
 #include <shell.h>
 #else
 #include <aos/cli.h>

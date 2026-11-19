@@ -38,6 +38,7 @@ typedef enum StunAttrType {
   STUN_ATTR_TYPE_MAPPED_ADDRESS = 0x0001,
   STUN_ATTR_TYPE_USERNAME = 0x0006,
   STUN_ATTR_TYPE_MESSAGE_INTEGRITY = 0x0008,
+  STUN_ATTR_TYPE_ERROR_CODE = 0x0009,
   STUN_ATTR_TYPE_LIFETIME = 0x000d,
   STUN_ATTR_TYPE_REALM = 0x0014,
   STUN_ATTR_TYPE_NONCE = 0x0015,
@@ -50,6 +51,8 @@ typedef enum StunAttrType {
   STUN_ATTR_TYPE_ICE_CONTROLLED = 0x8029,
   STUN_ATTR_TYPE_ICE_CONTROLLING = 0x802a,
   STUN_ATTR_TYPE_SOFTWARE = 0x8022,
+  STUN_ATTR_TYPE_RESPONSE_ORIGIN = 0x802b,
+  STUN_ATTR_TYPE_OTHER_ADDRESS = 0x802c,
   // https://datatracker.ietf.org/doc/html/draft-thatcher-ice-network-cost-00
   STUN_ATTR_TYPE_NETWORK_COST = 0xc057,
 
@@ -86,6 +89,7 @@ struct StunMessage {
   StunClass stunclass;
   StunMethod stunmethod;
   uint32_t fingerprint;
+  uint16_t error_code;
   char message_integrity[20];
   char username[128];
   char realm[64];
@@ -104,7 +108,7 @@ void stun_get_mapped_address(char* value, uint8_t* mask, Address* addr);
 
 void stun_msg_parse(StunMessage* msg, uint8_t* buf, size_t len);
 
-void stun_parse_msg_buf(StunMessage* msg);
+int stun_parse_msg_buf(StunMessage* msg);
 
 void stun_calculate_fingerprint(char* buf, size_t len, uint32_t* fingerprint);
 

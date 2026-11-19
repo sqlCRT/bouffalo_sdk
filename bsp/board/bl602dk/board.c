@@ -13,11 +13,14 @@
 #include "bl602_glb.h"
 
 #include "mm.h"
+#include "tlsf.h"
 
 extern void log_start(void);
 
 extern uint32_t __HeapBase;
 extern uint32_t __HeapLimit;
+extern uint32_t _heap_wifi_start;
+extern uint32_t _heap_wifi_size;
 
 static struct bflb_device_s *uart0;
 
@@ -152,6 +155,9 @@ void ram_heap_init(void)
     heap_len = ((size_t)&__HeapLimit - (size_t)&__HeapBase);
     mm_register_heap(MM_HEAP_OCRAM_0, "OCRAM", MM_ALLOCATOR_TLSF, &__HeapBase, heap_len);
 
+    heap_len = (size_t)&_heap_wifi_size;
+    mm_register_heap(MM_HEAP_WRAM_0, "WRAM", MM_ALLOCATOR_TLSF, &_heap_wifi_start, heap_len);
+
     /* ram info dump */
     printf("dynamic memory init success\r\n"
            "  ocram heap size: %d Kbyte \r\n",
@@ -159,6 +165,11 @@ void ram_heap_init(void)
 }
 
 extern int main(void);
+
+enum bflb_rtc_32k_clk_type board_get_rtc_32k_clk_type(void)
+{
+    return BFLB_RTC_32K_CLK_RC;
+}
 
 void board_init(void)
 {
@@ -174,6 +185,7 @@ void board_init(void)
     }
 
     system_clock_init();
+    bflb_rtc_init(NULL, board_get_rtc_32k_clk_type());
     peripheral_clock_init();
     bflb_irq_initialize();
 
